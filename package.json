@@ -19,13 +19,14 @@
     "dotenv": "^17.3.1",
     "grammy": "^1.40.0",
     "mongodb": "^7.1.0",
+    "node-schedule": "^2.1.1",
     "pino": "^10.3.1",
-    "postgres": "^3.4.8",
     "typescript": "^5.9.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
+    "@types/node-schedule": "^2.1.8",
     "eslint": "^9.39.3",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
