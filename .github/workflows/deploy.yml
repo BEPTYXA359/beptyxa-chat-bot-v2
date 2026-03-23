@@ -29,11 +29,11 @@ jobs:
             
             echo "BOT_TOKEN=$BOT_TOKEN" > .env
             echo "MONGO_URI=$MONGO_URI" >> .env
-            echo "MONGO_DB_NAME=MONGO_DB_NAME" >> .env
+            echo "MONGO_DB_NAME=$MONGO_DB_NAME" >> .env
             echo "EXCHANGE_APP_ID=$EXCHANGE_APP_ID" >> .env
             echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> .env
             echo "NODE_ENV=production" >> .env
             
-            docker compose up -d --build
+            docker-compose up -d --build
             
             docker image prune -f
