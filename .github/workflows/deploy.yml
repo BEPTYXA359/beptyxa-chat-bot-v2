@@ -1,0 +1,39 @@
+name: Deploy Beptyxa Bot to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
+          EXCHANGE_APP_ID: ${{ secrets.EXCHANGE_APP_ID }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY
+          script: |
+            cd /projects/beptyxa-chat-bot-v2
+            
+            git pull origin main
+            
+            echo "BOT_TOKEN=$BOT_TOKEN" > .env
+            echo "MONGO_URI=$MONGO_URI" >> .env
+            echo "MONGO_DB_NAME=MONGO_DB_NAME" >> .env
+            echo "EXCHANGE_APP_ID=$EXCHANGE_APP_ID" >> .env
+            echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> .env
+            echo "NODE_ENV=production" >> .env
+            
+            docker compose up -d --build
+            
+            docker image prune -f
