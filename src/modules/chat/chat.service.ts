@@ -1,13 +1,15 @@
 import { ChatRepository } from './chat.repository';
 import { OpenAiProvider } from '../../infrastructure/llm/openai.provider';
-import { ChatMessage, ChatSettings } from './chat.types';
+import { ChatMessage, ChatSettings, GPTProvider } from './chat.types';
 import { CryptoService } from '../../shared/services/crypto.service';
 import { logger } from '../../shared/logger';
+import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 
 export class ChatService {
   constructor(
     private readonly chatRepository: ChatRepository,
     private readonly openaiProvider: OpenAiProvider,
+    private readonly groqProvider: GroqProvider,
     private readonly cryptoService: CryptoService,
   ) {}
 
@@ -23,18 +25,22 @@ export class ChatService {
     return chat.settings;
   }
 
-  public async processGptRequest(chatId: number, prompt: string): Promise<string> {
+  public async processGptRequest(
+    chatId: number,
+    prompt: string,
+    provider: GPTProvider,
+  ): Promise<string> {
     const chat = await this.chatRepository.ensureChatExists(chatId);
 
-    if (!chat.settings.isOpenAiEnabled) {
-      return 'Функция ChatGPT отключена в настройках этого чата.';
-    }
+    if (provider === 'OpenAi') {
+      if (!chat.settings.isOpenAiEnabled) {
+        return 'Функция ChatGPT отключена в настройках этого чата.';
+      }
 
-    if (!chat.settings.openAiApiKey) {
-      return 'У вас не настроен API ключ OpenAI! Добавьте его через Mini App.';
+      if (!chat.settings.openAiApiKey) {
+        return 'У вас не настроен API ключ OpenAI! Добавьте его через Mini App.';
+      }
     }
-
-    const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey);
 
     await this.chatRepository.addGptMessage(chatId, 'user', prompt);
 
@@ -50,21 +56,30 @@ export class ChatService {
 
     messagesForLlm.unshift({
       role: 'system',
-      content: `${chat.settings.openAiSystemPrompt || 'Ты полезный ассистент.'} Но твои ответы строго не должны превышать 3500 символов.`,
+      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'} Но твои ответы строго не должны превышать 3500 символов.`,
     });
 
     try {
-      const reply = await this.openaiProvider.generateText(
-        messagesForLlm,
-        decryptedKey,
-        chat.settings.openAiModel,
-      );
+      let reply = '';
+
+      if (provider === 'OpenAi') {
+        const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey!);
+        reply = await this.openaiProvider.generateText(
+          messagesForLlm,
+          decryptedKey,
+          chat.settings.openAiModel,
+        );
+      } else if (provider === 'Groq') {
+        reply = await this.groqProvider.generateText(messagesForLlm);
+      } else {
+        throw new Error(`Неизвестный провайдер: ${provider}`);
+      }
 
       await this.chatRepository.addGptMessage(chatId, 'assistant', reply);
       return reply;
     } catch (error) {
-      logger.error({ err: error }, 'Произошла ошибка при обращении к OpenAI.');
-      return 'Произошла ошибка при обращении к OpenAI.';
+      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${provider}`);
+      return `Произошла ошибка при обращении к ${provider}. Попробуйте позже.`;
     }
   }
 

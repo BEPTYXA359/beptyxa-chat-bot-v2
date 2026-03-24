@@ -14,7 +14,7 @@ export const ChatSettingsSchema = z.object({
   isOpenAiEnabled: z.boolean().default(true),
   isChatterboxEnabled: z.boolean().default(false),
   openAiApiKey: z.string().optional(),
-  openAiSystemPrompt: z.string().optional(),
+  llmSystemPrompt: z.string().optional(),
   chatterboxSystemPrompt: z.string().optional(),
   openAiModel: z.string().default('gpt-4o-mini'),
   chatterboxChance: z.number().min(0).max(1).default(0.02),
@@ -28,3 +28,5 @@ export const ChatDocumentSchema = z.object({
   chatterboxMessages: z.array(ChatMessageSchema).default([]),
 });
 export type ChatDocument = z.infer<typeof ChatDocumentSchema>;
+
+export type GPTProvider = 'OpenAi' | 'Groq';

@@ -10,6 +10,8 @@ const configSchema = z.object({
   MONGO_URI: z.string().min(1),
   MONGO_DB_NAME: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(32),
+  GROQ_API_KEY: z.string().min(1),
+  GROQ_MODEL: z.string().min(1),
 });
 
 export const config = configSchema.parse(process.env);

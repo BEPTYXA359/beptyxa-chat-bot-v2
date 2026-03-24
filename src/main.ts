@@ -4,6 +4,7 @@ import { Database } from './infrastructure/mongo/mongo.client';
 
 import { CurrencyService } from './modules/converter/currency.service';
 import { OpenAiProvider } from './infrastructure/llm/openai.provider';
+import { GroqProvider } from './infrastructure/llm/groq.provider';
 import { CryptoService } from './shared/services/crypto.service';
 
 import { SteamService } from './modules/steam/steam.service';
@@ -24,12 +25,18 @@ async function bootstrap() {
     const cryptoService = new CryptoService();
 
     const openAiProvider = new OpenAiProvider();
+    const groqProvider = new GroqProvider();
 
     const steamService = new SteamService(currencyService);
 
     const chatRepository = new ChatRepository(db);
 
-    const chatService = new ChatService(chatRepository, openAiProvider, cryptoService);
+    const chatService = new ChatService(
+      chatRepository,
+      openAiProvider,
+      groqProvider,
+      cryptoService,
+    );
 
     const bot = createBot();
 
@@ -44,6 +51,13 @@ async function bootstrap() {
 
     setupSteamCommands(bot);
     setupChatCommands(bot);
+
+    bot.catch((err) => {
+      logger.error(
+        { err: err.error },
+        `Ошибка в работе бота для апдейта ${err.ctx.update.update_id}`,
+      );
+    });
 
     bot.start({
       onStart: (botInfo) => {

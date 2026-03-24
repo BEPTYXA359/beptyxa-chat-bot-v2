@@ -1,36 +1,16 @@
-import { Bot } from 'grammy';
+import { Bot, HearsContext } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { formatForTelegram, splitMessage } from '../../shared/utils/text.util';
+import { GPTProvider } from './chat.types';
 
 export const setupChatCommands = (bot: Bot<BotContext>) => {
   bot.hears(/^чатгпт\s+(.+)/i, async (ctx) => {
-    const prompt = ctx.match[1];
+    await makeLlmAnswer(ctx, 'OpenAi');
+  });
 
-    try {
-      await ctx.replyWithChatAction('typing');
-      const reply = await ctx.services.chat.processGptRequest(ctx.chat.id, prompt);
-
-      const messages = splitMessage(reply);
-
-      for (const msg of messages) {
-        const formattedMsg = formatForTelegram(msg);
-        try {
-          await ctx.reply(formattedMsg, {
-            parse_mode: 'MarkdownV2',
-            reply_parameters: { message_id: ctx.msg.message_id },
-          });
-        } catch (error) {
-          await ctx.reply(msg, {
-            reply_parameters: { message_id: ctx.msg.message_id },
-          });
-          logger.error({ err: error }, 'Произошла ошибка при отправке ответа ChatGPT в MarkdownV2');
-        }
-      }
-    } catch (error) {
-      logger.error({ err: error }, 'Произошла ошибка при обращении к ChatGPT');
-      await ctx.reply('Произошла ошибка при обращении к ChatGPT');
-    }
+  bot.hears(/^грок\s+(.+)/i, async (ctx) => {
+    await makeLlmAnswer(ctx, 'Groq');
   });
 
   bot.on('message:text', async (ctx, next) => {
@@ -60,4 +40,33 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     }
     await next();
   });
+};
+
+const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvider) => {
+  const prompt = ctx.match[1];
+
+  try {
+    await ctx.replyWithChatAction('typing');
+    const reply = await ctx.services.chat.processGptRequest(ctx.chat.id, prompt, provider);
+
+    const messages = splitMessage(reply);
+
+    for (const msg of messages) {
+      const formattedMsg = formatForTelegram(msg);
+      try {
+        await ctx.reply(formattedMsg, {
+          parse_mode: 'MarkdownV2',
+          reply_parameters: { message_id: ctx.msg.message_id },
+        });
+      } catch (error) {
+        await ctx.reply(msg, {
+          reply_parameters: { message_id: ctx.msg.message_id },
+        });
+        logger.error({ err: error }, `Ошибка при отправке MarkdownV2 от ${provider}`);
+      }
+    }
+  } catch (error) {
+    logger.error({ err: error }, `Критическая ошибка команды ${provider}`);
+    await ctx.reply(`Произошла ошибка при обращении к ${provider}`);
+  }
 };
