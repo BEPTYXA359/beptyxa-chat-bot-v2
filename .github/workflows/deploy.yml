@@ -17,11 +17,13 @@ jobs:
           MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
           EXCHANGE_APP_ID: ${{ secrets.EXCHANGE_APP_ID }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY
+          envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY,GROQ_API_KEY,GROQ_MODEL
           script: |
             cd /projects/beptyxa-chat-bot-v2
             
@@ -33,6 +35,8 @@ jobs:
             echo "EXCHANGE_APP_ID=$EXCHANGE_APP_ID" >> .env
             echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> .env
             echo "NODE_ENV=production" >> .env
+            echo "GROQ_API_KEY=$GROQ_API_KEY" >> .env
+            echo "GROQ_MODEL=$GROQ_MODEL" >> .env
             
             docker-compose up -d --build
             
