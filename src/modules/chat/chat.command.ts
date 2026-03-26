@@ -40,6 +40,47 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     }
     await next();
   });
+
+  bot.hears(/^конвертер\s+(.+)/i, async (ctx) => {
+    const query = ctx.match[1];
+
+    try {
+      await ctx.replyWithChatAction('typing');
+
+      const parsedData = await ctx.services.chat.parseCurrency(query);
+
+      if (!parsedData || !parsedData.amount || !parsedData.from) {
+        return ctx.reply(
+          'Не смог понять запрос. Напиши что-то вроде: "конвертер 100 долларов в евро"',
+        );
+      }
+
+      let result: number;
+      try {
+        result = ctx.services.currency.convert(parsedData.amount, parsedData.from, parsedData.to);
+      } catch (convertError) {
+        if (convertError instanceof Error) {
+          logger.warn({ err: convertError }, 'Ошибка внутри CurrencyService');
+          return ctx.reply(`Ошибка: ${convertError.message}`);
+        } else {
+          logger.warn({ err: convertError }, 'Неизвестная ошибка внутри CurrencyService');
+          return ctx.reply('Произошла непредвиденная ошибка при конвертации.');
+        }
+      }
+
+      const roundedResult = Number(result.toFixed(2));
+
+      const message = `*${parsedData.amount} ${parsedData.from}* это примерно *${roundedResult} ${parsedData.to}*`;
+
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_parameters: { message_id: ctx.msg.message_id },
+      });
+    } catch (error) {
+      logger.error({ err: error }, 'Ошибка в команде конвертера');
+      await ctx.reply('Произошла системная ошибка при конвертации');
+    }
+  });
 };
 
 const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvider) => {

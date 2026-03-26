@@ -125,4 +125,8 @@ export class ChatService {
       return null;
     }
   }
+
+  public async parseCurrency(query: string) {
+    return this.groqProvider.parseCurrencyQuery(query);
+  }
 }
