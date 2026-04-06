@@ -1,4 +1,4 @@
-import { CurrencyService } from '../converter/currency.service';
+import { CurrencyService } from '../currency/currency.service';
 import { SteamApiResponseSchema } from './steam.types';
 import { logger } from '../../shared/logger';
 

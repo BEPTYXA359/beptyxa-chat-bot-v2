@@ -2,7 +2,7 @@ import { createBot } from './bot/bot';
 import { logger } from './shared/logger';
 import { Database } from './infrastructure/mongo/mongo.client';
 
-import { CurrencyService } from './modules/converter/currency.service';
+import { CurrencyService } from './modules/currency/currency.service';
 import { OpenAiProvider } from './infrastructure/llm/openai.provider';
 import { GroqProvider } from './infrastructure/llm/groq.provider';
 import { CryptoService } from './shared/services/crypto.service';
@@ -22,6 +22,7 @@ async function bootstrap() {
     const db = database.getDb();
 
     const currencyService = new CurrencyService();
+    await currencyService.init();
     const cryptoService = new CryptoService();
 
     const openAiProvider = new OpenAiProvider();
@@ -68,6 +69,8 @@ async function bootstrap() {
     const stopApp = () => {
       logger.info('Останавливаем бота...');
       bot.stop();
+      currencyService.destroy();
+
       process.exit(0);
     };
 

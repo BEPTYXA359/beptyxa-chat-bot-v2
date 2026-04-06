@@ -6,9 +6,24 @@ import { ExchangeRatesSchema } from './currency.types';
 export class CurrencyService {
   private baseCurrency: string = 'USD';
   private rates: Record<string, number> = {};
+  private job: schedule.Job | null = null;
 
-  constructor() {
-    this.init();
+  constructor() {}
+
+  public async init(): Promise<void> {
+    await this.fetchRates();
+
+    this.job = schedule.scheduleJob({ hour: 12, minute: 0, tz: 'Europe/Moscow' }, () => {
+      this.fetchRates();
+    });
+
+    logger.info('CurrencyService успешно инициализирован');
+  }
+
+  public destroy(): void {
+    if (this.job) {
+      this.job.cancel();
+    }
   }
 
   private async fetchRates() {
@@ -27,14 +42,6 @@ export class CurrencyService {
     } catch (error) {
       logger.error({ err: error }, 'Ошибка при обновлении курсов');
     }
-  }
-
-  private init() {
-    this.fetchRates();
-
-    schedule.scheduleJob({ hour: 12, minute: 0, tz: 'Europe/Moscow' }, () => {
-      this.fetchRates();
-    });
   }
 
   public convert(amount: number, from: string, to: string): number {

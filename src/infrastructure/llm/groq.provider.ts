@@ -2,7 +2,7 @@ import Groq from 'groq-sdk';
 import { logger } from '../../shared/logger';
 import { ChatMessage } from '../../modules/chat/chat.types';
 import { config } from '../../shared/config';
-import { CurrencyParseResult, currencyParseSchema } from '../../modules/converter/currency.types';
+import { CurrencyParseResult, currencyParseSchema } from '../../modules/currency/currency.types';
 import { z } from 'zod';
 
 export class GroqProvider {
