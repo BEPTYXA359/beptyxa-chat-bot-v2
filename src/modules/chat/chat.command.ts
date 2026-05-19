@@ -81,6 +81,16 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
       await ctx.reply('Произошла системная ошибка при конвертации');
     }
   });
+
+  bot.command('webapp', async (ctx) => {
+    await ctx.reply('Нажми кнопку, чтобы получить токен', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Получить токен', web_app: { url: 'https://breezy-jars-invite.loca.lt' } }],
+        ],
+      },
+    });
+  });
 };
 
 const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvider) => {

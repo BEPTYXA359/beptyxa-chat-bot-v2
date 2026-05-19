@@ -5,3 +5,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    networks:
+      - beptyxa-network
+
+networks:
+  beptyxa-network:
+    name: beptyxa-network
+    driver: bridge

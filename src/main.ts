@@ -13,6 +13,7 @@ import { setupSteamCommands } from './modules/steam/steam.command';
 import { ChatRepository } from './modules/chat/chat.repository';
 import { ChatService } from './modules/chat/chat.service';
 import { setupChatCommands } from './modules/chat/chat.command';
+import { WebServer } from './infrastructure/web/fastify.server';
 
 async function bootstrap() {
   try {
@@ -66,9 +67,14 @@ async function bootstrap() {
       },
     });
 
-    const stopApp = () => {
+    const webServer = new WebServer(chatService);
+    await webServer.init();
+    await webServer.start();
+
+    const stopApp = async () => {
       logger.info('Останавливаем бота...');
-      bot.stop();
+      await bot.stop();
+      await webServer.stop();
       currencyService.destroy();
 
       process.exit(0);

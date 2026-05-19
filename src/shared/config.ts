@@ -12,6 +12,7 @@ const configSchema = z.object({
   ENCRYPTION_KEY: z.string().length(32),
   GROQ_API_KEY: z.string().min(1),
   GROQ_MODEL: z.string().min(1),
+  PORT: z.coerce.number().int().positive().default(3000),
 });
 
 export const config = configSchema.parse(process.env);

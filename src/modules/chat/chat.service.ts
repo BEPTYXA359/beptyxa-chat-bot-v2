@@ -5,6 +5,21 @@ import { CryptoService } from '../../shared/services/crypto.service';
 import { logger } from '../../shared/logger';
 import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 
+interface TelegramChatMemberResponse {
+  ok: boolean;
+  result?: {
+    status: 'creator' | 'administrator' | 'member' | 'restricted' | 'left' | 'kicked';
+  };
+  description?: string;
+}
+
+interface CacheEntry {
+  isAdmin: boolean;
+  expiresAt: number;
+}
+const adminCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
 export class ChatService {
   constructor(
     private readonly chatRepository: ChatRepository,
@@ -128,5 +143,70 @@ export class ChatService {
 
   public async parseCurrency(query: string) {
     return this.groqProvider.parseCurrencyQuery(query);
+  }
+
+  public async getChatInfo(chatId: number) {
+    return this.chatRepository.ensureChatExists(chatId);
+  }
+
+  public async updateSettings(chatId: number, updates: Partial<ChatSettings>) {
+    const chat = await this.chatRepository.ensureChatExists(chatId);
+
+    if (updates.openAiApiKey) {
+      updates.openAiApiKey = this.cryptoService.encrypt(updates.openAiApiKey);
+    }
+
+    await this.chatRepository.updateChatSettings(chatId, updates);
+  }
+
+  async checkUserIsAdmin(chatId: number, userId: number): Promise<boolean> {
+    const cacheKey = `${chatId}:${userId}`;
+    const now = Date.now();
+
+    const cached = adminCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.isAdmin;
+    }
+
+    try {
+      const botToken = process.env.BOT_TOKEN;
+      if (!botToken) {
+        throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменных окружения');
+      }
+
+      const response = await fetch(
+        `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${userId}`,
+      );
+
+      const data = (await response.json()) as TelegramChatMemberResponse;
+
+      if (!data.ok || !data.result) {
+        logger.warn(
+          { chatId, userId, data },
+          'Telegram API вернул ошибку при проверке прав пользователя',
+        );
+        return false;
+      }
+
+      const status = data.result.status;
+      const isAdmin = status === 'creator' || status === 'administrator';
+
+      adminCache.set(cacheKey, {
+        isAdmin,
+        expiresAt: now + CACHE_TTL_MS,
+      });
+
+      if (adminCache.size > 1000) {
+        adminCache.clear();
+      }
+
+      return isAdmin;
+    } catch (error) {
+      logger.error(
+        { err: error, chatId, userId },
+        'Ошибка сети при запросе getChatMember к Telegram API',
+      );
+      return false;
+    }
   }
 }

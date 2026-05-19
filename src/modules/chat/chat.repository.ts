@@ -64,4 +64,25 @@ export class ChatRepository {
       },
     );
   }
+
+  public async updateChatSettings(chatId: number, updates: Partial<ChatSettings>) {
+    const setPayload: Record<string, any> = {};
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined) {
+        setPayload[`settings.${key}`] = value;
+      }
+    }
+
+    if (Object.keys(setPayload).length === 0) {
+      return;
+    }
+
+    await this.collection.updateOne(
+      { chatId },
+      {
+        $set: setPayload,
+      },
+    );
+  }
 }
