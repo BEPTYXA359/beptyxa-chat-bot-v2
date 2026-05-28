@@ -3,6 +3,7 @@ import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { formatForTelegram, splitMessage } from '../../shared/utils/text.util';
 import { GPTProvider } from './chat.types';
+import { config } from '../../shared/config';
 
 export const setupChatCommands = (bot: Bot<BotContext>) => {
   bot.hears(/^чатгпт\s+(.+)/i, async (ctx) => {
@@ -82,11 +83,18 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     }
   });
 
-  bot.command('webapp', async (ctx) => {
-    await ctx.reply('Нажми кнопку, чтобы получить токен', {
+  bot.command('app', async (ctx) => {
+    const chatId = ctx.chat.id;
+
+    await ctx.reply('Приложение:', {
       reply_markup: {
         inline_keyboard: [
-          [{ text: 'Получить токен', web_app: { url: 'https://breezy-jars-invite.loca.lt' } }],
+          [
+            {
+              text: 'Открыть приложение',
+              web_app: { url: `${config.APP_URL}/?chat_id=${chatId}` },
+            },
+          ],
         ],
       },
     });

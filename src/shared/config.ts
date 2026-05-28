@@ -13,6 +13,7 @@ const configSchema = z.object({
   GROQ_API_KEY: z.string().min(1),
   GROQ_MODEL: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(3000),
+  APP_URL: z.url(),
 });
 
 export const config = configSchema.parse(process.env);
