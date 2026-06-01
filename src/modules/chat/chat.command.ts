@@ -85,19 +85,40 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
 
   bot.command('app', async (ctx) => {
     const chatId = ctx.chat.id;
+    const isGroup = chatId < 0;
 
-    await ctx.reply('Приложение:', {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: 'Открыть приложение',
-              web_app: { url: `${config.APP_URL}/?chat_id=${chatId}` },
-            },
+    if (isGroup) {
+      const botUsername = ctx.me.username;
+
+      const appShortName = config.APP_SHORTNAME;
+      const appUrl = `https://t.me/${botUsername}/${appShortName}?startapp=${chatId}`;
+
+      await ctx.reply('Приложение:', {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: 'Открыть приложение',
+                url: appUrl,
+              },
+            ],
           ],
-        ],
-      },
-    });
+        },
+      });
+    } else {
+      await ctx.reply('Приложение:', {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: 'Открыть приложение',
+                web_app: { url: `${config.APP_URL}` },
+              },
+            ],
+          ],
+        },
+      });
+    }
   });
 };
 
