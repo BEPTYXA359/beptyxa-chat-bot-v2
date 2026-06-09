@@ -22,4 +22,35 @@ export class OpenAiProvider {
       throw new Error('Не удалось получить ответ от OpenAI. Проверьте ваш API ключ.');
     }
   }
+
+  public async getAvailableTextModels(apiKey: string): Promise<Array<string>> {
+    try {
+      const client = new OpenAI({ apiKey });
+      const response = await client.models.list();
+
+      const textModelRegex = /^(gpt-)/i;
+      const excludeKeywords = [
+        'audio',
+        'realtime',
+        'tts',
+        'dall-e',
+        'whisper',
+        'embedding',
+        'image',
+      ];
+
+      return response.data
+        .filter((model) => {
+          const lowerId = model.id.toLowerCase();
+          const isTextPattern = textModelRegex.test(lowerId);
+          const hasExcludedKeyword = excludeKeywords.some((keyword) => lowerId.includes(keyword));
+          return isTextPattern && !hasExcludedKeyword;
+        })
+        .map((model) => model.id)
+        .sort();
+    } catch (error) {
+      logger.error({ err: error }, 'Ошибка при запросе списка моделей к OpenAI API');
+      return [];
+    }
+  }
 }

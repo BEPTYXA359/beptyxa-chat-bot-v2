@@ -9,7 +9,7 @@ export interface SettingsRoutesOptions {
 }
 
 const querySchema = z.object({
-  chatId: z.coerce.number().optional(), // coerce преобразует строку из URL в число
+  chatId: z.coerce.number().optional(),
 });
 
 export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
@@ -17,15 +17,6 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
   options,
 ) => {
   const { chatService } = options;
-
-  fastify.get('/me', async (request, reply) => {
-    const user = request.user!;
-    return {
-      message: `Привет, ${user.first_name}!`,
-      userId: user.id,
-      username: user.username,
-    };
-  });
 
   fastify.get('/', async (request, reply) => {
     const userId = request.user!.id;
@@ -49,6 +40,11 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
         return reply.status(404).send({ error: 'Чат не найден' });
       }
 
+      let availableModels: Array<string> = [];
+      if (chat.settings.openAiApiKey) {
+        availableModels = await chatService.getAvailableModels(targetChatId);
+      }
+
       return reply.send({
         isOpenAiEnabled: chat.settings.isOpenAiEnabled,
         isChatterboxEnabled: chat.settings.isChatterboxEnabled,
@@ -57,6 +53,7 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
         chatterboxSystemPrompt: chat.settings.chatterboxSystemPrompt,
         openAiModel: chat.settings.openAiModel,
         chatterboxChance: chat.settings.chatterboxChance,
+        availableModels,
       });
     } catch (error) {
       logger.error({ err: error, userId }, 'Ошибка получения настроек');

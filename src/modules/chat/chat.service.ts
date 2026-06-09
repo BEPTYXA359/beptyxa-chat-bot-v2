@@ -152,6 +152,10 @@ export class ChatService {
   public async updateSettings(chatId: number, updates: Partial<ChatSettings>) {
     const chat = await this.chatRepository.ensureChatExists(chatId);
 
+    if (!chat) {
+      throw new Error('Чат не найден');
+    }
+
     if (updates.openAiApiKey) {
       updates.openAiApiKey = this.cryptoService.encrypt(updates.openAiApiKey);
     }
@@ -207,6 +211,23 @@ export class ChatService {
         'Ошибка сети при запросе getChatMember к Telegram API',
       );
       return false;
+    }
+  }
+
+  public async getAvailableModels(chatId: number): Promise<Array<string>> {
+    const chat = await this.chatRepository.getChat(chatId);
+
+    if (!chat || !chat.settings.openAiApiKey) {
+      return [];
+    }
+
+    try {
+      const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey);
+
+      return await this.openaiProvider.getAvailableTextModels(decryptedKey);
+    } catch (error) {
+      logger.error({ err: error, chatId }, 'Ошибка при получении или расшифровке моделей OpenAI');
+      return [];
     }
   }
 }
