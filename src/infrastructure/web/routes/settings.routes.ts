@@ -3,14 +3,11 @@ import { updateSettingsSchema } from '../types/settings.types';
 import { ChatService } from '../../../modules/chat/chat.service';
 import { logger } from '../../../shared/logger';
 import { z } from 'zod';
+import { getTargetChatId } from '../utils/request.util';
 
 export interface SettingsRoutesOptions {
   chatService: ChatService;
 }
-
-const querySchema = z.object({
-  chatId: z.coerce.number().optional(),
-});
 
 export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
   fastify,
@@ -20,9 +17,7 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
 
   fastify.get('/', async (request, reply) => {
     const userId = request.user!.id;
-    const query = querySchema.safeParse(request.query);
-
-    const targetChatId = query.success && query.data.chatId ? query.data.chatId : userId;
+    const targetChatId = getTargetChatId(request);
 
     try {
       if (targetChatId !== userId) {
@@ -63,8 +58,7 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
 
   fastify.post('/', async (request, reply) => {
     const userId = request.user!.id;
-    const query = querySchema.safeParse(request.query);
-    const targetChatId = query.success && query.data.chatId ? query.data.chatId : userId;
+    const targetChatId = getTargetChatId(request);
 
     const validationResult = updateSettingsSchema.safeParse(request.body);
 

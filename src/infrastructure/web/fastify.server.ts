@@ -5,13 +5,17 @@ import { config } from '../../shared/config';
 import { telegramAuthHook } from './middlewares/telegram-auth.middleware';
 import { ChatService } from '../../modules/chat/chat.service';
 import { settingsRoutes } from './routes/settings.routes';
+import { reminderRoutes } from './routes/reminder.routes';
+import { ReminderService } from '../../modules/reminder/reminder.service';
 
 export class WebServer {
   public readonly app: FastifyInstance;
   private readonly chatService: ChatService;
+  private readonly reminderService: ReminderService;
 
-  constructor(chatService: ChatService) {
+  constructor(chatService: ChatService, reminderService: ReminderService) {
     this.chatService = chatService;
+    this.reminderService = reminderService;
     this.app = Fastify({
       logger: true,
       trustProxy: true,
@@ -24,7 +28,7 @@ export class WebServer {
       methods: ['GET', 'POST', 'PUT', 'DELETE'],
     });
 
-    this.app.get('/api/ping', async (request, reply) => {
+    this.app.get('/api/ping', async () => {
       return {
         status: 'ok',
         message: 'Fastify server is running!',
@@ -38,6 +42,11 @@ export class WebServer {
       protectedInstance.register(settingsRoutes, {
         prefix: '/api/settings',
         chatService: this.chatService,
+      });
+
+      protectedInstance.register(reminderRoutes, {
+        prefix: '/api/reminders',
+        reminderService: this.reminderService,
       });
     });
   }
