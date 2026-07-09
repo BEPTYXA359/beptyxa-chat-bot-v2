@@ -130,7 +130,8 @@ const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvide
     await ctx.replyWithChatAction('typing');
 
     const chatInfo = await ctx.services.chat.getChatInfo(chatId);
-    const isStreaming = chatInfo?.settings.isStreamingEnabled ?? false;
+    const isPrivate = ctx.chat.type === 'private';
+    const isStreaming = isPrivate && (chatInfo?.settings.isStreamingEnabled ?? false);
 
     if (isStreaming) {
       const stream = ctx.services.chat.processGptRequestStream(chatId, prompt, provider);
