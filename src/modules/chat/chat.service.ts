@@ -110,8 +110,6 @@ export class ChatService {
       return;
     }
 
-    await this.chatRepository.addGptMessage(chatId, 'user', prompt);
-
     const messagesForLlm: Omit<ChatMessage, 'timestamp'>[] = chat.gptMessages.map((msg) => ({
       role: msg.role,
       content: msg.content,
@@ -159,6 +157,7 @@ export class ChatService {
       }
     }
 
+    await this.chatRepository.addGptMessage(chatId, 'user', prompt);
     await this.chatRepository.addGptMessage(chatId, 'assistant', fullText);
   }
 
