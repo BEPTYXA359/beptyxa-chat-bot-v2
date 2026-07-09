@@ -98,6 +98,70 @@ export class ChatService {
     }
   }
 
+  public async *processGptRequestStream(
+    chatId: number,
+    prompt: string,
+    provider: GPTProvider,
+  ): AsyncIterable<string> {
+    const chat = await this.chatRepository.ensureChatExists(chatId);
+
+    if (provider === 'OpenAi' && !chat.settings.openAiApiKey) {
+      yield 'У вас не настроен API ключ OpenAI! Добавьте его через Mini App.';
+      return;
+    }
+
+    await this.chatRepository.addGptMessage(chatId, 'user', prompt);
+
+    const messagesForLlm: Omit<ChatMessage, 'timestamp'>[] = chat.gptMessages.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }));
+
+    messagesForLlm.push({
+      role: 'user',
+      content: prompt,
+    });
+
+    messagesForLlm.unshift({
+      role: 'system',
+      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'} Но твои ответы строго не должны превышать 3500 символов.`,
+    });
+
+    let fullText = '';
+
+    try {
+      const stream =
+        provider === 'OpenAi'
+          ? await this.openaiProvider.generateTextStream(
+              messagesForLlm,
+              this.cryptoService.decrypt(chat.settings.openAiApiKey!),
+              chat.settings.openAiModel,
+            )
+          : await this.groqProvider.generateTextStream(messagesForLlm);
+
+      let buffer = '';
+      for await (const chunk of stream) {
+        fullText += chunk;
+        buffer += chunk;
+        if (!/[\p{L}\p{N}]/u.test(buffer)) continue;
+        yield buffer;
+        buffer = '';
+      }
+      if (buffer) yield buffer;
+    } catch (error) {
+      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${provider}`);
+
+      if (fullText) {
+        yield `\n\n[Ошибка: ответ получен не полностью]`;
+      } else {
+        yield `Произошла ошибка при обращении к ${provider}. Попробуйте позже.`;
+        return;
+      }
+    }
+
+    await this.chatRepository.addGptMessage(chatId, 'assistant', fullText);
+  }
+
   public async triggerChatterboxReply(chatId: number, text: string): Promise<string | null> {
     const chat = await this.chatRepository.getChat(chatId);
 

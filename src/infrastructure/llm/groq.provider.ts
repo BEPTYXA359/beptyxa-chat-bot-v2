@@ -26,6 +26,21 @@ export class GroqProvider {
     }
   }
 
+  public async *generateTextStream(
+    messages: Omit<ChatMessage, 'timestamp'>[],
+  ): AsyncIterable<string> {
+    const stream = await this.client.chat.completions.create({
+      model: config.GROQ_MODEL,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) yield content;
+    }
+  }
+
   public async parseCurrencyQuery(query: string): Promise<CurrencyParseResult | null> {
     try {
       const response = await this.client.chat.completions.create({

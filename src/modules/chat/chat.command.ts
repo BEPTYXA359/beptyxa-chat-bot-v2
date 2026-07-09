@@ -1,7 +1,7 @@
 import { Bot, HearsContext } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
-import { formatForTelegram, splitMessage } from '../../shared/utils/text.util';
+import { splitMessage } from '../../shared/utils/text.util';
 import { GPTProvider } from './chat.types';
 import { config } from '../../shared/config';
 
@@ -124,25 +124,29 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
 
 const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvider) => {
   const prompt = ctx.match[1];
+  const chatId = ctx.chat.id;
 
   try {
     await ctx.replyWithChatAction('typing');
-    const reply = await ctx.services.chat.processGptRequest(ctx.chat.id, prompt, provider);
 
-    const messages = splitMessage(reply);
+    const chatInfo = await ctx.services.chat.getChatInfo(chatId);
+    const isStreaming = chatInfo?.settings.isStreamingEnabled ?? false;
 
-    for (const msg of messages) {
-      const formattedMsg = formatForTelegram(msg);
-      try {
-        await ctx.reply(formattedMsg, {
-          parse_mode: 'MarkdownV2',
-          reply_parameters: { message_id: ctx.msg.message_id },
-        });
-      } catch (error) {
-        await ctx.reply(msg, {
-          reply_parameters: { message_id: ctx.msg.message_id },
-        });
-        logger.error({ err: error }, `Ошибка при отправке MarkdownV2 от ${provider}`);
+    if (isStreaming) {
+      const stream = ctx.services.chat.processGptRequestStream(chatId, prompt, provider);
+      await ctx.replyWithMarkdownStream(
+        stream,
+        undefined,
+        { reply_parameters: { message_id: ctx.msg.message_id } },
+      );
+    } else {
+      const reply = await ctx.services.chat.processGptRequest(chatId, prompt, provider);
+      const messages = splitMessage(reply);
+      for (const msg of messages) {
+        await ctx.replyWithRichMessage(
+          { markdown: msg },
+          { reply_parameters: { message_id: ctx.msg.message_id } },
+        );
       }
     }
   } catch (error) {

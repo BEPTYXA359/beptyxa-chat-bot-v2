@@ -1,5 +1,3 @@
-import telegramifyMarkdown from 'telegramify-markdown';
-
 export function splitMessage(text: string, maxLength: number = 4000): string[] {
   if (text.length <= maxLength) return [text];
 
@@ -22,8 +20,4 @@ export function splitMessage(text: string, maxLength: number = 4000): string[] {
   }
 
   return chunks;
-}
-
-export function formatForTelegram(text: string): string {
-  return telegramifyMarkdown(text, 'remove');
 }

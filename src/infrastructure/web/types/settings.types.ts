@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const updateSettingsSchema = z.object({
   isOpenAiEnabled: z.boolean().optional(),
   isChatterboxEnabled: z.boolean().optional(),
+  isStreamingEnabled: z.boolean().optional(),
   openAiApiKey: z.string().optional(),
   llmSystemPrompt: z.string().optional(),
   chatterboxSystemPrompt: z.string().optional(),

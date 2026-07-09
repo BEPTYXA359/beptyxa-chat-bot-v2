@@ -1,10 +1,15 @@
 import { Bot } from 'grammy';
+import { autoRetry } from '@grammyjs/auto-retry';
+import { stream } from '@grammyjs/stream';
 import { BotContext } from './bot.types';
 import { config } from '../shared/config';
 import { logger } from '../shared/logger';
 
 export const createBot = () => {
   const bot = new Bot<BotContext>(config.BOT_TOKEN);
+
+  bot.api.config.use(autoRetry());
+  bot.use(stream());
 
   bot.catch((err) => {
     const ctx = err.ctx;

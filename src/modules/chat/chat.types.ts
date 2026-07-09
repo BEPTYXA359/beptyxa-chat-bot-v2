@@ -13,6 +13,7 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 export const ChatSettingsSchema = z.object({
   isOpenAiEnabled: z.boolean().default(true),
   isChatterboxEnabled: z.boolean().default(false),
+  isStreamingEnabled: z.boolean().default(false),
   openAiApiKey: z.string().optional(),
   llmSystemPrompt: z.string().optional(),
   chatterboxSystemPrompt: z.string().optional(),

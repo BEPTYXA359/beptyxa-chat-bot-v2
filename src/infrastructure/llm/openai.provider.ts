@@ -23,6 +23,25 @@ export class OpenAiProvider {
     }
   }
 
+  public async *generateTextStream(
+    messages: Omit<ChatMessage, 'timestamp'>[],
+    apiKey: string,
+    model: string,
+  ): AsyncIterable<string> {
+    const client = new OpenAI({ apiKey });
+
+    const stream = await client.chat.completions.create({
+      model,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) yield content;
+    }
+  }
+
   public async getAvailableTextModels(apiKey: string): Promise<Array<string>> {
     try {
       const client = new OpenAI({ apiKey });

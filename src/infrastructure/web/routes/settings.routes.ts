@@ -43,6 +43,7 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
       return reply.send({
         isOpenAiEnabled: chat.settings.isOpenAiEnabled,
         isChatterboxEnabled: chat.settings.isChatterboxEnabled,
+        isStreamingEnabled: chat.settings.isStreamingEnabled,
         hasOpenAiApiKey: !!chat.settings.openAiApiKey,
         llmSystemPrompt: chat.settings.llmSystemPrompt,
         chatterboxSystemPrompt: chat.settings.chatterboxSystemPrompt,

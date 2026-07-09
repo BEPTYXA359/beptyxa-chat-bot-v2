@@ -18,6 +18,7 @@ export class ChatRepository {
     const defaultSettings: ChatSettings = {
       isOpenAiEnabled: true,
       isChatterboxEnabled: false,
+      isStreamingEnabled: false,
       llmSystemPrompt: 'Ты полезный ассистент.',
       chatterboxSystemPrompt: 'Ты саркастичный участник чата. Отвечай коротко и смешно.',
       openAiModel: 'gpt-4o-mini',
