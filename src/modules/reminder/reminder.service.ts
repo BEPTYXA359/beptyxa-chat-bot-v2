@@ -46,6 +46,10 @@ export class ReminderService {
       if (reminder.frequency === 'once') {
         try {
           await this.repository.delete(reminderId);
+          await this.agenda.cancel({
+            name: this.JOB_NAME,
+            'data.reminderId': reminderId,
+          } as any);
         } catch (error) {
           logger.error({ err: error, reminderId }, 'Ошибка при удалении выполненного напоминания');
         }
