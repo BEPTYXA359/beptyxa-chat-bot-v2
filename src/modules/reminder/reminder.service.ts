@@ -31,13 +31,11 @@ export class ReminderService {
       }
 
       try {
-        const mention = reminder.creatorUsername
-          ? `@${reminder.creatorUsername}`
-          : `[${reminder.creatorFirstName}](tg://user?id=${reminder.createdBy})`;
+        const text = reminder.silent
+          ? reminder.message
+          : `*${reminder.creatorUsername ? `@${reminder.creatorUsername}` : `[${reminder.creatorFirstName}](tg://user?id=${reminder.createdBy})`}*,\n\n ${reminder.message}`;
 
-        await this.bot.api.sendMessage(chatId, `*${mention},*\n\n${reminder.message}`, {
-          parse_mode: 'Markdown',
-        });
+        await this.bot.api.sendRichMessage(chatId, { markdown: text });
       } catch (error) {
         logger.error(
           { err: error, chatId, reminderId },
@@ -75,15 +73,15 @@ export class ReminderService {
       const [hours, minutes] = doc.time!.split(':').map(Number);
 
       if (doc.frequency === 'every_other_day') {
-        job.repeatEvery('2 days');
-        job.schedule(this.getStartDateForTime(hours, minutes));
+        job.schedule(this.getStartDateForTime(hours, minutes, doc.timezone));
+        job.repeatEvery('2 days', { timezone: doc.timezone });
       } else {
         let cronExpression = `${minutes} ${hours} * * *`;
         if (doc.frequency === 'specific_days' && doc.specificDays) {
           const days = doc.specificDays.join(',');
           cronExpression = `${minutes} ${hours} * * ${days}`;
         }
-        job.repeatEvery(cronExpression);
+        job.repeatEvery(cronExpression, { timezone: doc.timezone });
       }
     }
 
@@ -101,6 +99,8 @@ export class ReminderService {
       frequency: dto.frequency,
       time: dto.time,
       specificDays: dto.specificDays,
+      timezone: dto.timezone,
+      silent: dto.silent,
       createdAt: new Date(),
       createdBy: creator.id,
       creatorFirstName: creator.first_name,
@@ -128,11 +128,13 @@ export class ReminderService {
       throw new Error('Напоминания не существует');
     }
 
-    const updatedFields = {
+    const updatedFields: Partial<ReminderDocument> = {
       message: dto.message,
       frequency: dto.frequency,
       time: dto.time,
       specificDays: dto.specificDays,
+      timezone: dto.timezone,
+      silent: dto.silent,
     };
 
     const merged = { ...oldReminder, ...updatedFields };
@@ -170,7 +172,18 @@ export class ReminderService {
     logger.info({ count: reminders.length }, 'Расписания напоминаний восстановлены');
   }
 
-  private getStartDateForTime(hours: number, minutes: number): Date {
+  private getStartDateForTime(hours: number, minutes: number, timezone?: string): Date {
+    if (timezone) {
+      const now = new Date();
+      const parts = now.toLocaleString('en-US', { timeZone: timezone, hour12: false }).split(', ');
+      const [m, d, y] = parts[0].split('/').map(Number);
+      const nowInTz = Date.UTC(y, m - 1, d, ...parts[1].split(':').map(Number));
+
+      let start = Date.UTC(y, m - 1, d, hours, minutes, 0, 0);
+      if (start <= nowInTz) start += 86_400_000;
+      return new Date(start);
+    }
+
     const start = new Date();
     start.setHours(hours, minutes, 0, 0);
     if (start < new Date()) {

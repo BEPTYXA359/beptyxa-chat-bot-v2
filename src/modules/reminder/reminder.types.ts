@@ -9,6 +9,11 @@ export const createReminderSchema = z.object({
   frequency: FrequencyType,
   specificDays: z.array(z.number().min(0).max(6)).optional(),
   message: z.string().min(1).max(1000),
+  timezone: z.string().refine(
+    (tz) => { try { Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; } catch { return false; }},
+    'Invalid IANA timezone',
+  ).optional(),
+  silent: z.boolean().default(false),
 });
 
 export type CreateReminderDto = z.infer<typeof createReminderSchema>;
@@ -21,6 +26,8 @@ export interface ReminderDocument {
   time: string;
   specificDays?: number[];
   agendaJobId?: string;
+  timezone?: string;
+  silent?: boolean;
   createdAt: Date;
   createdBy: number;
   creatorFirstName: string;
