@@ -114,7 +114,15 @@ export const setupSteamCommands = (bot: Bot<BotContext>) => {
         return;
       }
 
-      const dlcs = await ctx.services.steam.getDlcInfo(dlcIds, gameName);
+      const dlcs = await ctx.services.steam.getDlcInfo(dlcIds, gameName, async (current, total) => {
+        await ctx.editMessageReplyMarkup({
+          reply_markup: {
+            inline_keyboard: [[
+              { text: `Обрабатываю цены DLC... (${current}/${total})`, callback_data: `steam_dlc:${appId}` },
+            ]],
+          },
+        });
+      });
       const fullMessage =
         ctx.services.steam.formatGameMessage(
           editions,

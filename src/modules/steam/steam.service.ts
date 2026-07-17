@@ -106,10 +106,15 @@ export class SteamService {
     };
   }
 
-  public async getDlcInfo(dlcIds: number[], gameName?: string): Promise<EditionInfo[]> {
+  public async getDlcInfo(
+    dlcIds: number[],
+    gameName?: string,
+    onProgress?: (current: number, total: number) => Promise<void>,
+  ): Promise<EditionInfo[]> {
     const dlcs: EditionInfo[] = [];
 
-    for (const id of dlcIds) {
+    for (const [index, id] of dlcIds.entries()) {
+      if (onProgress) await onProgress(index + 1, dlcIds.length);
       try {
         const response = await this.throttledFetch(
           `https://store.steampowered.com/api/appdetails?cc=kz&appids=${id}`,
@@ -207,7 +212,27 @@ export class SteamService {
     const lines: string[] = [];
     lines.push('');
     lines.push('<h4>DLC</h4>');
-    lines.push(this.formatTable(dlcs));
+
+    let rows = '';
+    let totalKzt = 0;
+    let totalRub = 0;
+
+    for (const dlc of dlcs) {
+      const name = this.escapeHtml(dlc.name);
+      if (dlc.isFree) {
+        rows += `<tr><td align="left">${name}</td><td align="center" colspan="2">Бесплатно</td></tr>`;
+      } else {
+        totalKzt += dlc.finalPriceKzt;
+        totalRub += dlc.finalPriceRub;
+        rows += `<tr><td align="left">${name}</td><td align="center">${this.formatKztPriceHtml(dlc)}</td><td align="right">${this.formatRubPriceHtml(dlc)}</td></tr>`;
+      }
+    }
+
+    if (dlcs.length > 1) {
+      rows += `<tr><td align="left"><b>Итого (${dlcs.length} шт.)</b></td><td align="center"><b>${this.formatPrice(totalKzt)}₸</b></td><td align="right"><b>~${this.formatPrice(totalRub)} ₽</b></td></tr>`;
+    }
+
+    lines.push(`<table bordered striped><tr><th align="center">Название</th><th align="center" colspan="2">Цена</th></tr>${rows}</table>`);
     return lines.join('\n');
   }
 
