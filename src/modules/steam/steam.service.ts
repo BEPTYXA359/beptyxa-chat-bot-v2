@@ -162,6 +162,62 @@ export class SteamService {
     return dlcs;
   }
 
+  public formatGameInline(
+    editions: EditionInfo[],
+    subscriptions: EditionInfo[],
+    gameName: string,
+    hasRussianLanguage?: boolean,
+    releaseDate?: string | null,
+    isComingSoon?: boolean,
+    isGameFree?: boolean,
+  ): string {
+    const parts: string[] = [];
+
+    let title = `*${this.escapeTableCell(gameName)}*`;
+    if (hasRussianLanguage) title += ' 🇷🇺';
+    parts.push(title);
+
+    if (isComingSoon) {
+      parts.push('');
+      parts.push(`_${releaseDate ? this.formatReleaseDate(releaseDate) : 'В разработке'}_`);
+    }
+
+    if (editions.length > 0) {
+      parts.push('');
+      parts.push('*Издания:*');
+      for (const ed of editions) {
+        if (ed.isFree) {
+          parts.push(`  • ${ed.name} — Бесплатно`);
+        } else if (ed.originalPriceKzt && ed.discountPercent) {
+          parts.push(
+            `  • ${ed.name} — ${this.formatPrice(ed.finalPriceKzt)}₸ (~${this.formatPrice(ed.finalPriceRub)} ₽) (скидка ${ed.discountPercent}%)`,
+          );
+        } else {
+          parts.push(
+            `  • ${ed.name} — ${this.formatPrice(ed.finalPriceKzt)}₸ (~${this.formatPrice(ed.finalPriceRub)} ₽)`,
+          );
+        }
+      }
+    }
+
+    if (subscriptions.length > 0) {
+      parts.push('');
+      parts.push('*Подписка:*');
+      for (const sub of subscriptions) {
+        parts.push(
+          `  • ${this.formatPrice(sub.finalPriceKzt)}₸ / мес. (~${this.formatPrice(sub.finalPriceRub)} ₽)`,
+        );
+      }
+    }
+
+    if (editions.length === 0 && subscriptions.length === 0 && !isComingSoon && !isGameFree) {
+      parts.push('');
+      parts.push('_Продажи прекращены_');
+    }
+
+    return parts.join('\n');
+  }
+
   public formatGameMessage(
     editions: EditionInfo[],
     subscriptions: EditionInfo[],
@@ -232,7 +288,9 @@ export class SteamService {
       rows += `<tr><td align="left"><b>Итого (${dlcs.length} шт.)</b></td><td align="center"><b>${this.formatPrice(totalKzt)}₸</b></td><td align="right"><b>~${this.formatPrice(totalRub)} ₽</b></td></tr>`;
     }
 
-    lines.push(`<table bordered striped><tr><th align="center">Название</th><th align="center" colspan="2">Цена</th></tr>${rows}</table>`);
+    lines.push(
+      `<table bordered striped><tr><th align="center">Название</th><th align="center" colspan="2">Цена</th></tr>${rows}</table>`,
+    );
     return lines.join('\n');
   }
 

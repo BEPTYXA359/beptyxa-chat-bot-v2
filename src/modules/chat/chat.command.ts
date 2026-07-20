@@ -83,6 +83,47 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     }
   });
 
+  bot.command('help', async (ctx) => {
+    await ctx.reply(
+      `💡 *Чем я могу помочь:*
+
+💱 *Конвертация валют*
+  — \`конвертер 100 usd\`, \`50 евро в тенге\`
+
+💬 *AI-чат*
+  — \`чатгпт <вопрос>\` (OpenAI)
+  — \`грок <вопрос>\` (Groq)
+
+🎮 *Цены в Steam*
+  — отправь ссылку: \`store.steampowered.com/app/…\`
+
+🔍 *Inline-режим*
+  — набери \`@botname <запрос>\` в любом чате
+  — AI сам определит: валюта, вопрос, Steam
+
+⏰ *Напоминания*
+  — через Mini App: /app
+
+⚙️ *Настройки*
+  — /app → API ключ OpenAI, системный промпт`,
+      { parse_mode: 'Markdown' },
+    );
+  });
+
+  bot.command('start', async (ctx) => {
+    const firstName = ctx.from?.first_name || 'пользователь';
+    await ctx.reply(
+      `Привет, ${firstName}! 👋
+
+Я — многофункциональный бот. Умею конвертировать валюту, отвечать на вопросы, показывать цены в Steam, ставить напоминания и многое другое.
+
+Подробнее: /help
+
+⚙️ Настроить API ключ и другое: /app`,
+      { parse_mode: 'Markdown' },
+    );
+  });
+
   bot.command('app', async (ctx) => {
     const chatId = ctx.chat.id;
     const isGroup = chatId < 0;
@@ -135,11 +176,9 @@ const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvide
 
     if (isStreaming) {
       const stream = ctx.services.chat.processGptRequestStream(chatId, prompt, provider);
-      await ctx.replyWithMarkdownStream(
-        stream,
-        undefined,
-        { reply_parameters: { message_id: ctx.msg.message_id } },
-      );
+      await ctx.replyWithMarkdownStream(stream, undefined, {
+        reply_parameters: { message_id: ctx.msg.message_id },
+      });
     } else {
       const reply = await ctx.services.chat.processGptRequest(chatId, prompt, provider);
       const messages = splitMessage(reply);

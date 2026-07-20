@@ -16,6 +16,10 @@ import { setupSteamCommands } from './modules/steam/steam.command';
 import { ChatRepository } from './modules/chat/chat.repository';
 import { ChatService } from './modules/chat/chat.service';
 import { setupChatCommands } from './modules/chat/chat.command';
+
+import { QueryRouterService } from './modules/inline/query-router.service';
+import { setupInlineCommands } from './modules/inline/inline.command';
+
 import { WebServer } from './infrastructure/web/fastify.server';
 
 import { ReminderRepository } from './modules/reminder/reminder.repository';
@@ -71,6 +75,9 @@ async function bootstrap() {
 
     setupSteamCommands(bot);
     setupChatCommands(bot);
+
+    const queryRouter = new QueryRouterService(groqProvider);
+    setupInlineCommands(bot, queryRouter);
 
     bot.catch((err) => {
       logger.error(

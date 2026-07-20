@@ -71,7 +71,7 @@ export class ChatService {
 
     messagesForLlm.unshift({
       role: 'system',
-      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'} Но твои ответы строго не должны превышать 3500 символов.`,
+      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'}`,
     });
 
     try {
@@ -122,7 +122,7 @@ export class ChatService {
 
     messagesForLlm.unshift({
       role: 'system',
-      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'} Но твои ответы строго не должны превышать 3500 символов.`,
+      content: `${chat.settings.llmSystemPrompt || 'Ты полезный ассистент.'}`,
     });
 
     let fullText = '';
@@ -202,6 +202,17 @@ export class ChatService {
       logger.error({ err: error }, 'Произошла ошибка при использовании chatterbox');
       return null;
     }
+  }
+
+  public async processGptRequestSimple(query: string): Promise<string> {
+    const messages: Omit<ChatMessage, 'timestamp'>[] = [
+      {
+        role: 'system',
+        content: 'Ты полезный ассистент. Отвечай кратко, не более 3-4 предложений.',
+      },
+      { role: 'user', content: query },
+    ];
+    return this.groqProvider.generateText(messages);
   }
 
   public async parseCurrency(query: string) {

@@ -41,6 +41,43 @@ export class GroqProvider {
     }
   }
 
+  public async generateStructured<T>(
+    systemPrompt: string,
+    userMessage: string,
+    schema: z.ZodSchema<T>,
+  ): Promise<T | null> {
+    try {
+      const response = await this.client.chat.completions.create({
+        model: config.GROQ_MODEL,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) return null;
+
+      const raw = JSON.parse(content);
+      const parsed = schema.safeParse(raw);
+
+      if (!parsed.success) {
+        logger.warn(
+          { err: parsed.error.format(), content },
+          'generateStructured: Groq вернул данные, не соответствующие Zod-схеме',
+        );
+        return null;
+      }
+
+      return parsed.data;
+    } catch (error) {
+      logger.error({ err: error }, 'generateStructured: ошибка при запросе к Groq');
+      return null;
+    }
+  }
+
   public async parseCurrencyQuery(query: string): Promise<CurrencyParseResult | null> {
     try {
       const response = await this.client.chat.completions.create({
