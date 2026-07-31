@@ -6,9 +6,7 @@ export type FrequencyType = z.infer<typeof FrequencyType>;
 
 export const createReminderSchema = z
   .object({
-    time: z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-      message: 'time must be a valid ISO datetime',
-    }),
+    time: z.string(),
     frequency: FrequencyType,
     specificDays: z.array(z.number().int().min(0).max(6)).optional(),
     message: z.string().min(1).max(1000),
@@ -39,13 +37,25 @@ export const createReminderSchema = z
 
     if (data.frequency === 'once') {
       const runAt = new Date(data.time);
-      if (!Number.isNaN(runAt.getTime()) && runAt.getTime() <= Date.now()) {
+      if (Number.isNaN(runAt.getTime())) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'time must be a valid ISO datetime for once frequency',
+          path: ['time'],
+        });
+      } else if (runAt.getTime() <= Date.now()) {
         ctx.addIssue({
           code: 'custom',
           message: 'time for a one-time reminder must be in the future',
           path: ['time'],
         });
       }
+    } else if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(data.time)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'time must be in HH:MM format for recurring reminders',
+        path: ['time'],
+      });
     }
   });
 

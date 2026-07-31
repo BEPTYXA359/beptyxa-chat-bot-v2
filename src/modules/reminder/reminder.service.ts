@@ -104,8 +104,8 @@ export class ReminderService {
       this.assertValidDate(runAt, doc.time);
       job.schedule(runAt);
     } else if (doc.frequency === 'every_other_day') {
-      const runAt = new Date(doc.time);
-      this.assertValidDate(runAt, doc.time);
+      const { hours, minutes } = this.resolveClockTime(doc.time, timezone);
+      const runAt = this.nextOccurrence(hours, minutes, timezone);
       job.startDate(runAt);
       job.repeatEvery('2 days');
     } else {
@@ -143,6 +143,18 @@ export class ReminderService {
       throw new Error(`Невалидное значение времени напоминания: ${time}`);
     }
     return this.instantToClockTime(instant, timezone);
+  }
+
+  private nextOccurrence(hours: number, minutes: number, timezone: string): Date {
+    const now = new Date();
+    const offsetMs = this.getTzOffsetMs(now, timezone);
+    const parts = this.getTzParts(now, timezone);
+
+    let candidateMs = Date.UTC(parts.y, parts.m - 1, parts.d, hours, minutes, 0, 0) - offsetMs;
+    if (candidateMs <= now.getTime()) {
+      candidateMs += 86_400_000;
+    }
+    return new Date(candidateMs);
   }
 
   private instantToClockTime(
