@@ -2,7 +2,7 @@ import { Agenda, Job } from 'agenda';
 import { ReminderRepository } from './reminder.repository';
 import { CreateReminderDto, ReminderDocument } from './reminder.types';
 import { logger } from '../../shared/logger';
-import { Bot } from 'grammy';
+import { Bot, GrammyError } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { TelegramUser } from '../../shared/types/telegram.types';
 
@@ -73,6 +73,20 @@ export class ReminderService {
 
   private async sendReminder(reminder: ReminderDocument, chatId: number): Promise<void> {
     const text = this.buildPlainText(reminder);
+
+    try {
+      await this.bot.api.sendRichMessage(chatId, { markdown: text });
+      return;
+    } catch (error) {
+      if (!(error instanceof GrammyError && error.error_code === 400)) {
+        throw error;
+      }
+      logger.warn(
+        { err: error, chatId, reminderId: reminder._id },
+        'Rich-отправка не удалась (400), fallback на plain text',
+      );
+    }
+
     await this.bot.api.sendMessage(chatId, text);
   }
 
