@@ -109,7 +109,7 @@ export class ReminderService {
       job.startDate(runAt);
       job.repeatEvery('2 days');
     } else {
-      const { hours, minutes } = this.getLocalTimeParts(doc.time, timezone);
+      const { hours, minutes } = this.resolveClockTime(doc.time, timezone);
       let cronExpression = `${minutes} ${hours} * * *`;
       if (doc.frequency === 'specific_days' && doc.specificDays && doc.specificDays.length > 0) {
         cronExpression = `${minutes} ${hours} * * ${doc.specificDays.join(',')}`;
@@ -126,14 +126,32 @@ export class ReminderService {
     }
   }
 
-  private getLocalTimeParts(
-    isoTime: string,
+  private resolveClockTime(
+    time: string,
     timezone: string,
   ): {
     hours: number;
     minutes: number;
   } {
-    const instant = new Date(isoTime);
+    const legacy = /^(\d{1,2}):(\d{2})$/.exec(time);
+    if (legacy) {
+      return { hours: Number(legacy[1]) % 24, minutes: Number(legacy[2]) };
+    }
+
+    const instant = new Date(time);
+    if (Number.isNaN(instant.getTime())) {
+      throw new Error(`Невалидное значение времени напоминания: ${time}`);
+    }
+    return this.instantToClockTime(instant, timezone);
+  }
+
+  private instantToClockTime(
+    instant: Date,
+    timezone: string,
+  ): {
+    hours: number;
+    minutes: number;
+  } {
     const formatter = new Intl.DateTimeFormat('en-GB', {
       timeZone: timezone,
       hourCycle: 'h23',
@@ -239,8 +257,15 @@ export class ReminderService {
       const existing = jobsByReminderId.get(reminderId);
 
       if (!existing) {
-        await this.scheduleJob(reminderId, reminder.chatId, reminder);
-        created++;
+        try {
+          await this.scheduleJob(reminderId, reminder.chatId, reminder);
+          created++;
+        } catch (error) {
+          logger.error(
+            { err: error, reminderId },
+            'Не удалось запланировать напоминание при сверке',
+          );
+        }
         continue;
       }
 
@@ -250,8 +275,12 @@ export class ReminderService {
         } catch (error) {
           logger.error({ err: error, reminderId }, 'Не удалось удалить «мёртвый» джоб');
         }
-        await this.scheduleJob(reminderId, reminder.chatId, reminder);
-        repaired++;
+        try {
+          await this.scheduleJob(reminderId, reminder.chatId, reminder);
+          repaired++;
+        } catch (error) {
+          logger.error({ err: error, reminderId }, 'Не удалось перепланировать «мёртвый» джоб');
+        }
       }
     }
 
@@ -317,7 +346,7 @@ export class ReminderService {
       return new Date(anchor + stepsAfterAnchor * intervalMs);
     }
 
-    const { hours, minutes } = this.getLocalTimeParts(reminder.time, timezone);
+    const { hours, minutes } = this.resolveClockTime(reminder.time, timezone);
     const allowedDays =
       reminder.frequency === 'specific_days' && reminder.specificDays?.length
         ? new Set(reminder.specificDays)
