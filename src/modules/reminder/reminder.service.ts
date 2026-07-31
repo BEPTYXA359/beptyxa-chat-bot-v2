@@ -6,6 +6,8 @@ import { Bot } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { TelegramUser } from '../../shared/types/telegram.types';
 
+type Schedulable = Pick<ReminderDocument, 'frequency' | 'time' | 'specificDays' | 'timezone'>;
+
 export class ReminderService {
   private readonly JOB_NAME = 'send_telegram_reminder';
 
@@ -18,78 +20,116 @@ export class ReminderService {
   }
 
   private defineJobs(): void {
-    this.agenda.define(this.JOB_NAME, async (job: Job) => {
-      const { reminderId, chatId } = job.attrs.data as {
-        reminderId: string;
-        chatId: number;
-      };
+    this.agenda.define(
+      this.JOB_NAME,
+      async (job: Job) => {
+        const { reminderId, chatId } = job.attrs.data as {
+          reminderId: string;
+          chatId: number;
+        };
 
-      const reminder = await this.repository.getById(reminderId);
-      if (!reminder) {
-        logger.warn({ reminderId }, 'Напоминание не найдено в БД, пропускаем');
-        return;
-      }
-
-      try {
-        const text = reminder.silent
-          ? reminder.message
-          : `*${reminder.creatorUsername ? `@${reminder.creatorUsername}` : `[${reminder.creatorFirstName}](tg://user?id=${reminder.createdBy})`}*,\n\n ${reminder.message}`;
-
-        await this.bot.api.sendRichMessage(chatId, { markdown: text });
-      } catch (error) {
-        logger.error(
-          { err: error, chatId, reminderId },
-          'Ошибка при выполнении задачи отправки напоминания',
-        );
-      }
-
-      if (reminder.frequency === 'once') {
-        try {
-          await this.repository.delete(reminderId);
-          await this.agenda.cancel({
-            name: this.JOB_NAME,
-            'data.reminderId': reminderId,
-          } as any);
-        } catch (error) {
-          logger.error({ err: error, reminderId }, 'Ошибка при удалении выполненного напоминания');
+        const reminder = await this.repository.getById(reminderId);
+        if (!reminder) {
+          logger.warn({ reminderId }, 'Напоминание не найдено в БД, пропускаем');
+          return;
         }
-      }
-    });
+
+        try {
+          await this.sendReminder(reminder, chatId);
+        } catch (error) {
+          logger.error({ err: error, chatId, reminderId }, 'Ошибка при отправке напоминания');
+          return;
+        }
+
+        try {
+          await this.repository.update(reminderId, { lastFiredAt: new Date() });
+        } catch (error) {
+          logger.error({ err: error, reminderId }, 'Ошибка при обновлении lastFiredAt');
+        }
+
+        if (reminder.frequency === 'once') {
+          try {
+            await this.repository.delete(reminderId);
+            await this.cancelJob(reminderId);
+          } catch (error) {
+            logger.error(
+              { err: error, reminderId },
+              'Ошибка при удалении выполненного напоминания',
+            );
+          }
+        }
+      },
+      { lockLifetime: 60_000 },
+    );
   }
 
-  private async scheduleJob(
-    reminderId: string,
-    chatId: number,
-    doc: Partial<ReminderDocument>,
-  ): Promise<void> {
-    const jobData = {
-      reminderId,
-      chatId,
-    };
+  private buildPlainText(reminder: ReminderDocument): string {
+    if (reminder.silent) return reminder.message;
+    const mention = reminder.creatorUsername
+      ? `@${reminder.creatorUsername}`
+      : reminder.creatorFirstName;
+    return `${mention},\n\n${reminder.message}`;
+  }
 
-    const job = this.agenda.create(this.JOB_NAME, jobData);
+  private async sendReminder(reminder: ReminderDocument, chatId: number): Promise<void> {
+    const text = this.buildPlainText(reminder);
+    await this.bot.api.sendMessage(chatId, text);
+  }
+
+  private cancelJob(reminderId: string): Promise<number> {
+    return this.agenda.cancel({ name: this.JOB_NAME, data: { reminderId } });
+  }
+
+  private async scheduleJob(reminderId: string, chatId: number, doc: Schedulable): Promise<void> {
+    const timezone = doc.timezone ?? 'UTC';
+    const job = this.agenda.create(this.JOB_NAME, { reminderId, chatId });
     job.unique({ 'data.reminderId': reminderId });
 
     if (doc.frequency === 'once') {
-      const runAt = new Date(doc.time!);
+      const runAt = new Date(doc.time);
+      this.assertValidDate(runAt, doc.time);
       job.schedule(runAt);
+    } else if (doc.frequency === 'every_other_day') {
+      const runAt = new Date(doc.time);
+      this.assertValidDate(runAt, doc.time);
+      job.startDate(runAt);
+      job.repeatEvery('2 days');
     } else {
-      const [hours, minutes] = doc.time!.split(':').map(Number);
-
-      if (doc.frequency === 'every_other_day') {
-        job.schedule(this.getStartDateForTime(hours, minutes, doc.timezone));
-        job.repeatEvery('2 days', { timezone: doc.timezone });
-      } else {
-        let cronExpression = `${minutes} ${hours} * * *`;
-        if (doc.frequency === 'specific_days' && doc.specificDays) {
-          const days = doc.specificDays.join(',');
-          cronExpression = `${minutes} ${hours} * * ${days}`;
-        }
-        job.repeatEvery(cronExpression, { timezone: doc.timezone });
+      const { hours, minutes } = this.getLocalTimeParts(doc.time, timezone);
+      let cronExpression = `${minutes} ${hours} * * *`;
+      if (doc.frequency === 'specific_days' && doc.specificDays && doc.specificDays.length > 0) {
+        cronExpression = `${minutes} ${hours} * * ${doc.specificDays.join(',')}`;
       }
+      job.repeatEvery(cronExpression, { timezone });
     }
 
     await job.save();
+  }
+
+  private assertValidDate(date: Date, raw: string): void {
+    if (Number.isNaN(date.getTime())) {
+      throw new Error(`Невалидное значение времени напоминания: ${raw}`);
+    }
+  }
+
+  private getLocalTimeParts(
+    isoTime: string,
+    timezone: string,
+  ): {
+    hours: number;
+    minutes: number;
+  } {
+    const instant = new Date(isoTime);
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const parts = formatter.formatToParts(instant);
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+    return { hours: hour % 24, minutes: minute };
   }
 
   public async createReminder(
@@ -141,9 +181,19 @@ export class ReminderService {
       silent: dto.silent,
     };
 
-    const merged = { ...oldReminder, ...updatedFields };
+    try {
+      await this.cancelJob(reminderId);
+    } catch (error) {
+      logger.error({ err: error, reminderId }, 'Не удалось отменить старый джоб при обновлении');
+    }
 
-    await this.scheduleJob(reminderId, chatId, merged);
+    try {
+      await this.scheduleJob(reminderId, chatId, dto);
+    } catch (error) {
+      logger.error({ err: error, reminderId }, 'Не удалось перепланировать расписание напоминания');
+      throw new Error('Не удалось перепланировать расписание напоминания');
+    }
+
     await this.repository.update(reminderId, updatedFields);
   }
 
@@ -155,44 +205,176 @@ export class ReminderService {
     const reminder = await this.repository.getById(reminderId);
     if (!reminder) return;
 
-    await this.agenda.cancel({
-      name: this.JOB_NAME,
-      'data.reminderId': reminderId,
-    } as any);
+    await this.cancelJob(reminderId);
 
     await this.repository.delete(reminderId);
   }
 
-  public async syncJobs(): Promise<void> {
+  public async reconcileJobs(): Promise<void> {
     const reminders = await this.repository.getAll();
+    const agendaJobs = await this.repository.getAgendaJobs(this.JOB_NAME);
+
+    const reminderIds = new Set(reminders.map((reminder) => reminder._id!.toString()));
+    const jobsByReminderId = new Map(agendaJobs.map((job) => [job.reminderId, job]));
+
+    let created = 0;
+    let repaired = 0;
+
     for (const reminder of reminders) {
       const reminderId = reminder._id!.toString();
-      await this.agenda.cancel({
-        name: this.JOB_NAME,
-        'data.reminderId': reminderId,
-      } as any);
-      await this.scheduleJob(reminderId, reminder.chatId, reminder);
+      const existing = jobsByReminderId.get(reminderId);
+
+      if (!existing) {
+        await this.scheduleJob(reminderId, reminder.chatId, reminder);
+        created++;
+        continue;
+      }
+
+      if (existing.nextRunAt === null) {
+        try {
+          await this.cancelJob(reminderId);
+        } catch (error) {
+          logger.error({ err: error, reminderId }, 'Не удалось удалить «мёртвый» джоб');
+        }
+        await this.scheduleJob(reminderId, reminder.chatId, reminder);
+        repaired++;
+      }
     }
-    logger.info({ count: reminders.length }, 'Расписания напоминаний восстановлены');
+
+    for (const { reminderId } of agendaJobs) {
+      if (!reminderIds.has(reminderId)) {
+        try {
+          await this.cancelJob(reminderId);
+        } catch (error) {
+          logger.error({ err: error, reminderId }, 'Не удалось удалить orphan-джоб');
+        }
+      }
+    }
+
+    logger.info(
+      { total: reminders.length, created, repaired },
+      'Расписания напоминаний сверены с Agenda',
+    );
   }
 
-  private getStartDateForTime(hours: number, minutes: number, timezone?: string): Date {
-    if (timezone) {
-      const now = new Date();
-      const parts = now.toLocaleString('en-US', { timeZone: timezone, hour12: false }).split(', ');
-      const [m, d, y] = parts[0].split('/').map(Number);
-      const nowInTz = Date.UTC(y, m - 1, d, ...parts[1].split(':').map(Number));
+  public async catchUpMissed(): Promise<void> {
+    const reminders = await this.repository.getAll();
 
-      let start = Date.UTC(y, m - 1, d, hours, minutes, 0, 0);
-      if (start <= nowInTz) start += 86_400_000;
-      return new Date(start);
+    for (const reminder of reminders) {
+      if (reminder.frequency === 'once') continue;
+      if (!reminder.lastFiredAt) continue;
+
+      try {
+        const lastExpected = this.computeLastExpectedOccurrence(reminder);
+        if (!lastExpected) continue;
+
+        if (reminder.lastFiredAt.getTime() < lastExpected.getTime()) {
+          logger.info(
+            { reminderId: reminder._id, lastExpected },
+            'Догоняющая отправка пропущенного напоминания',
+          );
+          try {
+            await this.sendReminder(reminder, reminder.chatId);
+            await this.repository.update(reminder._id!.toString(), {
+              lastFiredAt: new Date(),
+            });
+          } catch (error) {
+            logger.error(
+              { err: error, reminderId: reminder._id },
+              'Ошибка догоняющей отправки напоминания',
+            );
+          }
+        }
+      } catch (error) {
+        logger.error({ err: error, reminderId: reminder._id }, 'Ошибка расчёта catch-up');
+      }
+    }
+  }
+
+  private computeLastExpectedOccurrence(reminder: ReminderDocument): Date | null {
+    const timezone = reminder.timezone ?? 'UTC';
+    const now = new Date();
+
+    if (reminder.frequency === 'every_other_day') {
+      const intervalMs = 2 * 86_400_000;
+      const anchor = (reminder.lastFiredAt ?? reminder.createdAt).getTime();
+      const stepsAfterAnchor = Math.floor((now.getTime() - anchor) / intervalMs);
+      if (stepsAfterAnchor < 1) return null;
+      return new Date(anchor + stepsAfterAnchor * intervalMs);
     }
 
-    const start = new Date();
-    start.setHours(hours, minutes, 0, 0);
-    if (start < new Date()) {
-      start.setDate(start.getDate() + 1);
+    const { hours, minutes } = this.getLocalTimeParts(reminder.time, timezone);
+    const allowedDays =
+      reminder.frequency === 'specific_days' && reminder.specificDays?.length
+        ? new Set(reminder.specificDays)
+        : new Set([0, 1, 2, 3, 4, 5, 6]);
+
+    const offsetMs = this.getTzOffsetMs(now, timezone);
+    const nowParts = this.getTzParts(now, timezone);
+
+    for (let back = 0; back < 8; back++) {
+      const dayInstant = new Date(
+        Date.UTC(nowParts.y, nowParts.m - 1, nowParts.d) - back * 86_400_000,
+      );
+      if (!allowedDays.has(dayInstant.getUTCDay())) continue;
+
+      const candidateMs =
+        Date.UTC(
+          dayInstant.getUTCFullYear(),
+          dayInstant.getUTCMonth(),
+          dayInstant.getUTCDate(),
+          hours,
+          minutes,
+          0,
+          0,
+        ) - offsetMs;
+
+      if (back === 0 && candidateMs > now.getTime()) continue;
+      return new Date(candidateMs);
     }
-    return start;
+
+    return null;
+  }
+
+  private getTzParts(
+    instant: Date,
+    timezone: string,
+  ): {
+    y: number;
+    m: number;
+    d: number;
+    h: number;
+    mi: number;
+    s: number;
+  } {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const collected: Record<string, number> = {};
+    for (const part of formatter.formatToParts(instant)) {
+      if (part.type === 'literal') continue;
+      collected[part.type] = Number(part.value);
+    }
+    return {
+      y: collected.year,
+      m: collected.month,
+      d: collected.day,
+      h: collected.hour,
+      mi: collected.minute,
+      s: collected.second,
+    };
+  }
+
+  private getTzOffsetMs(instant: Date, timezone: string): number {
+    const parts = this.getTzParts(instant, timezone);
+    const wallAsUtc = Date.UTC(parts.y, parts.m - 1, parts.d, parts.h, parts.mi, parts.s);
+    return wallAsUtc - instant.getTime();
   }
 }

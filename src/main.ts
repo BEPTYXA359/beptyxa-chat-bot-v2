@@ -59,10 +59,12 @@ async function bootstrap() {
     const bot = createBot();
 
     const reminderRepository = new ReminderRepository(db);
+    await reminderRepository.ensureIndexes();
     const reminderService = new ReminderService(reminderRepository, agenda, bot);
 
     await agenda.start();
-    await reminderService.syncJobs();
+    await reminderService.reconcileJobs();
+    await reminderService.catchUpMissed();
 
     bot.use(async (ctx, next) => {
       ctx.services = {
