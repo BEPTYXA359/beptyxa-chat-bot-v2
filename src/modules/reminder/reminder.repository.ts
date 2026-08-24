@@ -1,8 +1,9 @@
 import { Db, Collection, ObjectId } from 'mongodb';
-import { ReminderDocument } from './reminder.types';
+import { ReminderDocument, SteamSubscriber } from './reminder.types';
 
 export interface AgendaJobInfo {
   reminderId: string;
+  name: string;
   nextRunAt: Date | null;
 }
 
@@ -41,15 +42,33 @@ export class ReminderRepository {
     return this.collection.findOne({ _id: new ObjectId(id) });
   }
 
+  public async findSteamReleaseReminder(
+    chatId: number,
+    steamAppId: string,
+  ): Promise<ReminderDocument | null> {
+    return this.collection.findOne({ chatId, kind: 'steam_release', steamAppId });
+  }
+
+  public async addSubscriber(id: string, subscriber: SteamSubscriber): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id) },
+      { $push: { subscribers: subscriber } },
+    );
+  }
+
+  public async getAllSteamReleaseReminders(): Promise<ReminderDocument[]> {
+    return this.collection.find({ kind: 'steam_release' }).toArray();
+  }
+
   public async delete(id: string): Promise<void> {
     await this.collection.deleteOne({ _id: new ObjectId(id) });
   }
 
-  public async getAgendaJobs(jobName: string): Promise<AgendaJobInfo[]> {
+  public async getAgendaJobs(): Promise<AgendaJobInfo[]> {
     const docs = await this.agendaCollection
       .find(
-        { name: jobName, 'data.reminderId': { $type: 'string' } },
-        { projection: { 'data.reminderId': 1, nextRunAt: 1 } },
+        { 'data.reminderId': { $type: 'string' } },
+        { projection: { name: 1, 'data.reminderId': 1, nextRunAt: 1 } },
       )
       .toArray();
 
@@ -58,7 +77,8 @@ export class ReminderRepository {
         const reminderId = (doc as { data?: { reminderId?: string } }).data?.reminderId;
         if (typeof reminderId !== 'string') return null;
         const nextRunAt = (doc as { nextRunAt?: Date | null }).nextRunAt ?? null;
-        return { reminderId, nextRunAt };
+        const name = (doc as { name?: string }).name ?? '';
+        return { reminderId, nextRunAt, name };
       })
       .filter((item): item is AgendaJobInfo => item !== null);
   }

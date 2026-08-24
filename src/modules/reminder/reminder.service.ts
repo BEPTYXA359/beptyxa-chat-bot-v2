@@ -1,22 +1,38 @@
 import { Agenda, Job } from 'agenda';
 import { ReminderRepository } from './reminder.repository';
-import { CreateReminderDto, ReminderDocument } from './reminder.types';
+import { CreateReminderDto, ReminderDocument, SteamSubscriber } from './reminder.types';
 import { logger } from '../../shared/logger';
 import { Bot, GrammyError } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { TelegramUser } from '../../shared/types/telegram.types';
+import { SteamService } from '../steam/steam.service';
 
 type Schedulable = Pick<ReminderDocument, 'frequency' | 'time' | 'specificDays' | 'timezone'>;
+type SteamGameInfo = Awaited<ReturnType<SteamService['getGameInfo']>>;
+type SteamReleaseDateParts = { day: number; month: number; year: number };
+
+export type SteamSubscribeResult = 'created' | 'added' | 'already';
+
+const STEAM_RELEASE_TIMEZONE = 'Europe/Moscow';
+const STEAM_RELEASE_HOUR = 12;
+// Steam часто разблокирует игры позже полуночи; если в день выхода игра ещё
+// не доступна в полдень, повторяем проверку вечером того же дня
+const STEAM_RELEASE_RETRY_HOUR = 20;
 
 export class ReminderService {
   private readonly JOB_NAME = 'send_telegram_reminder';
+  private readonly STEAM_JOB_NAME = 'send_steam_reminder';
+  private readonly STEAM_CHECK_JOB_NAME = 'check_steam_releases';
+  private readonly STEAM_CHECK_CRON = `0 ${STEAM_RELEASE_HOUR} * * *`;
 
   constructor(
     private readonly repository: ReminderRepository,
     private readonly agenda: Agenda,
     private readonly bot: Bot<BotContext>,
+    private readonly steamService: SteamService,
   ) {
     this.defineJobs();
+    this.defineSteamJobs();
   }
 
   private defineJobs(): void {
@@ -63,6 +79,408 @@ export class ReminderService {
     );
   }
 
+  private defineSteamJobs(): void {
+    this.agenda.define(
+      this.STEAM_JOB_NAME,
+      async (job: Job) => {
+        const { reminderId, chatId, appId } = job.attrs.data as {
+          reminderId: string;
+          chatId: number;
+          appId: string;
+        };
+
+        const reminder = await this.repository.getById(reminderId);
+        if (!reminder) {
+          logger.warn({ reminderId }, 'Напоминание о выходе игры не найдено в БД, пропускаем');
+          return;
+        }
+
+        try {
+          await this.processSteamRelease(reminder, chatId, appId);
+        } catch (error) {
+          logger.error(
+            { err: error, chatId, reminderId, appId },
+            'Ошибка при обработке напоминания о выходе игры',
+          );
+        }
+      },
+      { lockLifetime: 60_000 },
+    );
+
+    this.agenda.define(
+      this.STEAM_CHECK_JOB_NAME,
+      async () => {
+        try {
+          await this.checkSteamReleases();
+        } catch (error) {
+          logger.error({ err: error }, 'Ошибка ежедневной проверки дат выхода игр');
+        }
+      },
+      { lockLifetime: 300_000 },
+    );
+  }
+
+  private async processSteamRelease(
+    reminder: ReminderDocument,
+    chatId: number,
+    appId: string,
+  ): Promise<void> {
+    const reminderId = reminder._id!.toString();
+    const gameName = reminder.gameName || 'Игра';
+    const subscribers = reminder.subscribers ?? [];
+
+    let info: SteamGameInfo | null = null;
+    try {
+      info = await this.steamService.getGameInfo(appId);
+    } catch (error) {
+      logger.warn(
+        { err: error, appId, reminderId },
+        'Не удалось получить свежие данные Steam при срабатывании напоминания',
+      );
+    }
+
+    const newParts =
+      info && info.releaseDate ? this.steamService.parseReleaseDateParts(info.releaseDate) : null;
+    const today = this.getTodayParts();
+
+    if (info && info.isComingSoon && newParts && this.isDateAfter(newParts, today)) {
+      const runAt = this.steamReleaseRunAt(newParts);
+      await this.sendRichWithFallback(
+        chatId,
+        this.buildSteamDelayMessage(gameName, appId, subscribers, newParts),
+      );
+      await this.sendSteamGameInfo(chatId, info);
+      await this.rescheduleSteamReminder(reminderId, chatId, appId, runAt, {
+        gameName: info.gameName,
+      });
+      return;
+    }
+
+    if (
+      info &&
+      info.isComingSoon &&
+      newParts &&
+      this.isSameDate(newParts, today) &&
+      this.getNowHourMsk() < STEAM_RELEASE_RETRY_HOUR
+    ) {
+      const runAt = this.wallClockInstant(
+        today.day,
+        today.month,
+        today.year,
+        STEAM_RELEASE_RETRY_HOUR,
+      );
+      await this.rescheduleSteamReminder(reminderId, chatId, appId, runAt);
+      return;
+    }
+
+    if (info && info.isComingSoon && !newParts) {
+      await this.sendRichWithFallback(
+        chatId,
+        this.buildSteamNoDateMessage(gameName, appId, subscribers),
+      );
+      await this.sendSteamGameInfo(chatId, info);
+      await this.deleteSteamReminder(reminderId);
+      return;
+    }
+
+    await this.sendRichWithFallback(
+      chatId,
+      this.buildSteamReleaseMessage(gameName, appId, subscribers),
+    );
+    if (info) {
+      await this.sendSteamGameInfo(chatId, info);
+    }
+    await this.deleteSteamReminder(reminderId);
+  }
+
+  private async checkSteamReleases(): Promise<void> {
+    const reminders = await this.repository.getAllSteamReleaseReminders();
+    if (reminders.length === 0) return;
+
+    logger.info({ total: reminders.length }, 'Ежедневная проверка дат выхода игр');
+
+    for (const reminder of reminders) {
+      const reminderId = reminder._id!.toString();
+      const appId = reminder.steamAppId;
+      if (!appId) continue;
+
+      try {
+        if (this.isScheduledToday(reminder.time)) continue;
+
+        const info = await this.steamService.getGameInfo(appId);
+
+        if (!info.isComingSoon) {
+          await this.sendRichWithFallback(
+            reminder.chatId,
+            this.buildSteamReleaseMessage(
+              info.gameName || reminder.gameName || 'Игра',
+              appId,
+              reminder.subscribers ?? [],
+              true,
+            ),
+          );
+          await this.sendSteamGameInfo(reminder.chatId, info);
+          await this.deleteSteamReminder(reminderId);
+          continue;
+        }
+
+        const newParts = info.releaseDate
+          ? this.steamService.parseReleaseDateParts(info.releaseDate)
+          : null;
+        if (!newParts) continue;
+
+        const scheduledParts = this.scheduledReleaseParts(reminder.time);
+        if (!scheduledParts || this.isSameDate(newParts, scheduledParts)) continue;
+
+        if (!this.isDateAfter(newParts, this.getTodayParts())) continue;
+
+        const runAt = this.steamReleaseRunAt(newParts);
+        await this.sendRichWithFallback(
+          reminder.chatId,
+          this.buildSteamDelayMessage(
+            info.gameName || reminder.gameName || 'Игра',
+            appId,
+            reminder.subscribers ?? [],
+            newParts,
+          ),
+        );
+        await this.sendSteamGameInfo(reminder.chatId, info);
+        await this.rescheduleSteamReminder(reminderId, reminder.chatId, appId, runAt, {
+          gameName: info.gameName,
+        });
+      } catch (error) {
+        logger.error({ err: error, reminderId, appId }, 'Ошибка проверки даты выхода игры');
+      }
+    }
+  }
+
+  public async scheduleSteamCheckJob(): Promise<void> {
+    await this.agenda.cancel({ name: this.STEAM_CHECK_JOB_NAME });
+    const job = this.agenda.create(this.STEAM_CHECK_JOB_NAME);
+    job.repeatEvery(this.STEAM_CHECK_CRON, { timezone: STEAM_RELEASE_TIMEZONE });
+    await job.save();
+    logger.info('Ежедневная проверка дат выхода игр запланирована');
+  }
+
+  public async subscribeToSteamRelease(
+    chatId: number,
+    subscriber: SteamSubscriber,
+    appId: string,
+    gameName: string,
+    releaseParts: SteamReleaseDateParts,
+  ): Promise<SteamSubscribeResult> {
+    const existing = await this.repository.findSteamReleaseReminder(chatId, appId);
+    if (existing) {
+      const alreadySubscribed = (existing.subscribers ?? []).some((s) => s.id === subscriber.id);
+      if (alreadySubscribed) return 'already';
+
+      await this.repository.addSubscriber(existing._id!.toString(), subscriber);
+      return 'added';
+    }
+
+    const runAt = this.steamReleaseRunAt(releaseParts);
+    const reminderDoc = await this.repository.create({
+      chatId,
+      kind: 'steam_release',
+      message: `🎮 Выход игры: ${gameName}`,
+      frequency: 'once',
+      time: runAt.toISOString(),
+      timezone: STEAM_RELEASE_TIMEZONE,
+      silent: true,
+      steamAppId: appId,
+      gameName,
+      subscribers: [subscriber],
+      createdAt: new Date(),
+      createdBy: subscriber.id,
+      creatorFirstName: subscriber.firstName,
+      creatorUsername: subscriber.username,
+    });
+
+    const reminderId = reminderDoc._id!.toString();
+
+    try {
+      await this.scheduleSteamJob(reminderId, chatId, appId, runAt);
+    } catch (error) {
+      logger.error(
+        { err: error, chatId, appId },
+        'Не удалось запланировать напоминание о выходе игры',
+      );
+      await this.repository.delete(reminderId);
+      throw new Error('Ошибка планирования напоминания');
+    }
+
+    return 'created';
+  }
+
+  private async scheduleSteamJob(
+    reminderId: string,
+    chatId: number,
+    appId: string,
+    runAt: Date,
+  ): Promise<void> {
+    const job = this.agenda.create(this.STEAM_JOB_NAME, { reminderId, chatId, appId });
+    job.unique({ 'data.reminderId': reminderId });
+    job.schedule(runAt);
+    await job.save();
+  }
+
+  private async rescheduleSteamReminder(
+    reminderId: string,
+    chatId: number,
+    appId: string,
+    runAt: Date,
+    extraUpdate: Partial<ReminderDocument> = {},
+  ): Promise<void> {
+    await this.repository.update(reminderId, { time: runAt.toISOString(), ...extraUpdate });
+    await this.cancelJob(reminderId);
+    await this.scheduleSteamJob(reminderId, chatId, appId, runAt);
+  }
+
+  private async deleteSteamReminder(reminderId: string): Promise<void> {
+    try {
+      await this.repository.delete(reminderId);
+      await this.cancelJob(reminderId);
+    } catch (error) {
+      logger.error({ err: error, reminderId }, 'Ошибка при удалении напоминания о выходе игры');
+    }
+  }
+
+  private async sendSteamGameInfo(chatId: number, info: SteamGameInfo): Promise<void> {
+    const message = this.steamService.formatGameMessage(
+      info.editions,
+      info.subscriptions,
+      info.headerImage,
+      info.gameName,
+      info.hasRussianLanguage,
+      info.releaseDate,
+      info.isComingSoon,
+      info.isGameFree,
+    );
+    if (!message.trim()) return;
+    await this.sendRichWithFallback(chatId, message);
+  }
+
+  private buildSteamReleaseMessage(
+    gameName: string,
+    appId: string,
+    subscribers: SteamSubscriber[],
+    early = false,
+  ): string {
+    const heading =
+      this.escapeMarkdownText(gameName) + (early ? ' вышла раньше срока!' : ' вышла!');
+    const mentions = this.mentionsMarkdown(subscribers);
+    const line = mentions
+      ? `${mentions}, игра, которую вы отслеживали, уже доступна.`
+      : 'Игра, которую вы отслеживали, уже доступна.';
+
+    return [
+      `## ${heading}`,
+      '',
+      line,
+      '',
+      `[Открыть в Steam](https://store.steampowered.com/app/${appId})`,
+    ].join('\n');
+  }
+
+  private buildSteamDelayMessage(
+    gameName: string,
+    appId: string,
+    subscribers: SteamSubscriber[],
+    newParts: SteamReleaseDateParts,
+  ): string {
+    const mentions = this.mentionsMarkdown(subscribers);
+    const line = `${mentions ? `${mentions}, ` : ''}игра выйдет ${this.formatPartsDateRu(newParts)}. Напомню снова в день выхода.`;
+
+    return [
+      `## Дата выхода ${this.escapeMarkdownText(gameName)} перенесена`,
+      '',
+      line,
+      '',
+      `[Открыть в Steam](https://store.steampowered.com/app/${appId})`,
+    ].join('\n');
+  }
+
+  private buildSteamNoDateMessage(
+    gameName: string,
+    appId: string,
+    subscribers: SteamSubscriber[],
+  ): string {
+    const mentions = this.mentionsMarkdown(subscribers);
+    const line = `${mentions ? `${mentions}, ` : ''}точную дату выхода Steam больше не показывает. Проверить актуальную информацию можно на странице игры.`;
+
+    return [
+      `## Дата выхода ${this.escapeMarkdownText(gameName)} пока неизвестна`,
+      '',
+      line,
+      '',
+      `[Открыть в Steam](https://store.steampowered.com/app/${appId})`,
+    ].join('\n');
+  }
+
+  private mentionsMarkdown(subscribers: SteamSubscriber[]): string {
+    return subscribers
+      .map((s) => `[${this.escapeMarkdownText(s.firstName || 'Игрок')}](tg://user?id=${s.id})`)
+      .join(', ');
+  }
+
+  private escapeMarkdownText(text: string): string {
+    return text.replace(/([_*[\]()`~#>\\])/g, '\\$1');
+  }
+
+  private formatPartsDateRu(parts: SteamReleaseDateParts): string {
+    return new Date(parts.year, parts.month - 1, parts.day).toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  }
+
+  private steamReleaseRunAt(parts: SteamReleaseDateParts): Date {
+    const runAt = this.wallClockInstant(parts.day, parts.month, parts.year, STEAM_RELEASE_HOUR);
+    if (runAt.getTime() <= Date.now()) {
+      return new Date(Date.now() + 60_000);
+    }
+    return runAt;
+  }
+
+  private wallClockInstant(day: number, month: number, year: number, hours: number): Date {
+    const wallAsUtc = Date.UTC(year, month - 1, day, hours, 0, 0, 0);
+    const offsetMs = this.getTzOffsetMs(new Date(wallAsUtc), STEAM_RELEASE_TIMEZONE);
+    return new Date(wallAsUtc - offsetMs);
+  }
+
+  private getTodayParts(): SteamReleaseDateParts {
+    const parts = this.getTzParts(new Date(), STEAM_RELEASE_TIMEZONE);
+    return { day: parts.d, month: parts.m, year: parts.y };
+  }
+
+  private getNowHourMsk(): number {
+    return this.getTzParts(new Date(), STEAM_RELEASE_TIMEZONE).h;
+  }
+
+  private scheduledReleaseParts(time: string): SteamReleaseDateParts | null {
+    const instant = new Date(time);
+    if (Number.isNaN(instant.getTime())) return null;
+    const parts = this.getTzParts(instant, STEAM_RELEASE_TIMEZONE);
+    return { day: parts.d, month: parts.m, year: parts.y };
+  }
+
+  private isScheduledToday(time: string): boolean {
+    const parts = this.scheduledReleaseParts(time);
+    if (!parts) return false;
+    return this.isSameDate(parts, this.getTodayParts());
+  }
+
+  private isSameDate(a: SteamReleaseDateParts, b: SteamReleaseDateParts): boolean {
+    return a.day === b.day && a.month === b.month && a.year === b.year;
+  }
+
+  private isDateAfter(a: SteamReleaseDateParts, b: SteamReleaseDateParts): boolean {
+    if (a.year !== b.year) return a.year > b.year;
+    if (a.month !== b.month) return a.month > b.month;
+    return a.day > b.day;
+  }
+
   private buildPlainText(reminder: ReminderDocument): string {
     if (reminder.silent) return reminder.message;
     const mention = reminder.creatorUsername
@@ -72,8 +490,10 @@ export class ReminderService {
   }
 
   private async sendReminder(reminder: ReminderDocument, chatId: number): Promise<void> {
-    const text = this.buildPlainText(reminder);
+    await this.sendRichWithFallback(chatId, this.buildPlainText(reminder));
+  }
 
+  private async sendRichWithFallback(chatId: number, text: string): Promise<void> {
     try {
       await this.bot.api.sendRichMessage(chatId, { markdown: text });
       return;
@@ -81,17 +501,14 @@ export class ReminderService {
       if (!(error instanceof GrammyError && error.error_code === 400)) {
         throw error;
       }
-      logger.warn(
-        { err: error, chatId, reminderId: reminder._id },
-        'Rich-отправка не удалась (400), fallback на plain text',
-      );
+      logger.warn({ err: error, chatId }, 'Rich-отправка не удалась (400), fallback на plain text');
     }
 
     await this.bot.api.sendMessage(chatId, text);
   }
 
   private cancelJob(reminderId: string): Promise<number> {
-    return this.agenda.cancel({ name: this.JOB_NAME, data: { reminderId } });
+    return this.agenda.cancel({ data: { reminderId } });
   }
 
   private async scheduleJob(reminderId: string, chatId: number, doc: Schedulable): Promise<void> {
@@ -216,6 +633,10 @@ export class ReminderService {
       throw new Error('Напоминания не существует');
     }
 
+    if (oldReminder.kind === 'steam_release') {
+      throw new Error('Напоминания о выходе игры нельзя редактировать');
+    }
+
     const updatedFields: Partial<ReminderDocument> = {
       message: dto.message,
       frequency: dto.frequency,
@@ -256,7 +677,7 @@ export class ReminderService {
 
   public async reconcileJobs(): Promise<void> {
     const reminders = await this.repository.getAll();
-    const agendaJobs = await this.repository.getAgendaJobs(this.JOB_NAME);
+    const agendaJobs = await this.repository.getAgendaJobs();
 
     const reminderIds = new Set(reminders.map((reminder) => reminder._id!.toString()));
     const jobsByReminderId = new Map(agendaJobs.map((job) => [job.reminderId, job]));
@@ -268,31 +689,30 @@ export class ReminderService {
       const reminderId = reminder._id!.toString();
       const existing = jobsByReminderId.get(reminderId);
 
-      if (!existing) {
-        try {
-          await this.scheduleJob(reminderId, reminder.chatId, reminder);
-          created++;
-        } catch (error) {
-          logger.error(
-            { err: error, reminderId },
-            'Не удалось запланировать напоминание при сверке',
-          );
-        }
-        continue;
-      }
+      const needsRepair =
+        !existing ||
+        existing.name !== this.getJobNameForReminder(reminder) ||
+        existing.nextRunAt === null;
 
-      if (existing.nextRunAt === null) {
+      if (!needsRepair) continue;
+
+      if (existing) {
         try {
           await this.cancelJob(reminderId);
         } catch (error) {
           logger.error({ err: error, reminderId }, 'Не удалось удалить «мёртвый» джоб');
         }
-        try {
-          await this.scheduleJob(reminderId, reminder.chatId, reminder);
+      }
+
+      try {
+        await this.scheduleJobForReminder(reminder);
+        if (existing) {
           repaired++;
-        } catch (error) {
-          logger.error({ err: error, reminderId }, 'Не удалось перепланировать «мёртвый» джоб');
+        } else {
+          created++;
         }
+      } catch (error) {
+        logger.error({ err: error, reminderId }, 'Не удалось запланировать напоминание при сверке');
       }
     }
 
@@ -310,6 +730,27 @@ export class ReminderService {
       { total: reminders.length, created, repaired },
       'Расписания напоминаний сверены с Agenda',
     );
+  }
+
+  private getJobNameForReminder(reminder: ReminderDocument): string {
+    return reminder.kind === 'steam_release' ? this.STEAM_JOB_NAME : this.JOB_NAME;
+  }
+
+  private async scheduleJobForReminder(reminder: ReminderDocument): Promise<void> {
+    const reminderId = reminder._id!.toString();
+
+    if (reminder.kind === 'steam_release') {
+      if (!reminder.steamAppId) {
+        logger.warn({ reminderId }, 'У напоминания о выходе игры нет steamAppId, пропускаем');
+        return;
+      }
+      const runAt = new Date(reminder.time);
+      this.assertValidDate(runAt, reminder.time);
+      await this.scheduleSteamJob(reminderId, reminder.chatId, reminder.steamAppId, runAt);
+      return;
+    }
+
+    await this.scheduleJob(reminderId, reminder.chatId, reminder);
   }
 
   public async catchUpMissed(): Promise<void> {

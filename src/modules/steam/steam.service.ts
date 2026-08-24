@@ -2,6 +2,33 @@ import { CurrencyService } from '../currency/currency.service';
 import { SteamApiResponseSchema, EditionInfo, REQUEST_DELAY_MS } from './steam.types';
 import { logger } from '../../shared/logger';
 
+const RELEASE_DATE_MONTHS: Record<string, number> = {
+  янв: 0,
+  фев: 1,
+  мар: 2,
+  апр: 3,
+  май: 4,
+  июн: 5,
+  июл: 6,
+  авг: 7,
+  сен: 8,
+  окт: 9,
+  ноя: 10,
+  дек: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
 export class SteamService {
   private lastRequestTime = 0;
 
@@ -415,7 +442,34 @@ export class SteamService {
   }
 
   private escapeTableCell(text: string): string {
-    return text.replace(/([_*\[\]()~`>#+={}.!\\-])/g, '\\$1');
+    return text.replace(/([_*[\]()~`>#+={}.!\\-])/g, '\\$1');
+  }
+
+  public parseReleaseDateParts(dateStr: string): {
+    day: number;
+    month: number;
+    year: number;
+  } | null {
+    if (/^(?:Ещё не объявлена|To be announced)$/i.test(dateStr)) return null;
+    if (/^(?:coming soon|скоро выходит)$/i.test(dateStr)) return null;
+    if (/^\d{4}$/.test(dateStr)) return null;
+
+    const m = dateStr.match(/(\d{1,2})\s*([а-яёa-z]+)\.?\s*,?\s*(\d{4})/i);
+    if (m) {
+      const month = RELEASE_DATE_MONTHS[m[2].toLowerCase().slice(0, 3)];
+      if (month !== undefined) {
+        return { day: parseInt(m[1]), month: month + 1, year: parseInt(m[3]) };
+      }
+    }
+
+    const fallback = new Date(dateStr.replace(/,/g, ''));
+    if (isNaN(fallback.getTime())) return null;
+
+    return {
+      day: fallback.getDate(),
+      month: fallback.getMonth() + 1,
+      year: fallback.getFullYear(),
+    };
   }
 
   private formatReleaseDate(dateStr: string): string {
@@ -431,47 +485,10 @@ export class SteamService {
       return `Дата выхода: ${dateStr} г.`;
     }
 
-    const months: Record<string, number> = {
-      янв: 0,
-      фев: 1,
-      мар: 2,
-      апр: 3,
-      май: 4,
-      июн: 5,
-      июл: 6,
-      авг: 7,
-      сен: 8,
-      окт: 9,
-      ноя: 10,
-      дек: 11,
-      jan: 0,
-      feb: 1,
-      mar: 2,
-      apr: 3,
-      may: 4,
-      jun: 5,
-      jul: 6,
-      aug: 7,
-      sep: 8,
-      oct: 9,
-      nov: 10,
-      dec: 11,
-    };
+    const parts = this.parseReleaseDateParts(dateStr);
+    if (!parts) return `Дата выхода: ${dateStr}`;
 
-    let date: Date | null = null;
-
-    const m = dateStr.match(/(\d{1,2})\s*([а-яёa-z]+)\.?\s*,?\s*(\d{4})/i);
-    if (m) {
-      const month = months[m[2].toLowerCase().slice(0, 3)];
-      if (month !== undefined) date = new Date(parseInt(m[3]), month, parseInt(m[1]));
-    }
-
-    if (!date) {
-      const d = new Date(dateStr.replace(/,/g, ''));
-      if (!isNaN(d.getTime())) date = d;
-    }
-
-    if (!date) return `Дата выхода: ${dateStr}`;
+    const date = new Date(parts.year, parts.month - 1, parts.day);
 
     const formatted = date.toLocaleDateString('ru-RU', {
       day: 'numeric',

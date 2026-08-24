@@ -60,9 +60,10 @@ async function bootstrap() {
 
     const reminderRepository = new ReminderRepository(db);
     await reminderRepository.ensureIndexes();
-    const reminderService = new ReminderService(reminderRepository, agenda, bot);
+    const reminderService = new ReminderService(reminderRepository, agenda, bot, steamService);
 
     await agenda.start();
+    await reminderService.scheduleSteamCheckJob();
     await reminderService.reconcileJobs();
     await reminderService.catchUpMissed();
 
@@ -75,7 +76,7 @@ async function bootstrap() {
       await next();
     });
 
-    setupSteamCommands(bot);
+    setupSteamCommands(bot, reminderService);
     setupChatCommands(bot);
 
     const queryRouter = new QueryRouterService(groqProvider);

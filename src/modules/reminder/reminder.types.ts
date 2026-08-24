@@ -61,6 +61,14 @@ export const createReminderSchema = z
 
 export type CreateReminderDto = z.infer<typeof createReminderSchema>;
 
+export type ReminderKind = 'regular' | 'steam_release';
+
+export interface SteamSubscriber {
+  id: number;
+  firstName: string;
+  username?: string;
+}
+
 export interface ReminderDocument {
   _id?: ObjectId;
   chatId: number;
@@ -71,6 +79,10 @@ export interface ReminderDocument {
   agendaJobId?: string;
   timezone?: string;
   silent?: boolean;
+  kind?: ReminderKind;
+  steamAppId?: string;
+  gameName?: string;
+  subscribers?: SteamSubscriber[];
   createdAt: Date;
   createdBy: number;
   creatorFirstName: string;
