@@ -25,6 +25,9 @@ import { WebServer } from './infrastructure/web/fastify.server';
 import { ReminderRepository } from './modules/reminder/reminder.repository';
 import { ReminderService } from './modules/reminder/reminder.service';
 
+import { CarPlateRepository } from './modules/car-plate/car-plate.repository';
+import { CarPlateService } from './modules/car-plate/car-plate.service';
+
 async function bootstrap() {
   try {
     logger.info('Инициализация приложения...');
@@ -62,6 +65,10 @@ async function bootstrap() {
     await reminderRepository.ensureIndexes();
     const reminderService = new ReminderService(reminderRepository, agenda, bot, steamService);
 
+    const carPlateRepository = new CarPlateRepository(db);
+    await carPlateRepository.ensureIndexes();
+    const carPlateService = new CarPlateService(carPlateRepository);
+
     await agenda.start();
     await reminderService.scheduleSteamCheckJob();
     await reminderService.reconcileJobs();
@@ -95,7 +102,7 @@ async function bootstrap() {
       },
     });
 
-    const webServer = new WebServer(chatService, reminderService);
+    const webServer = new WebServer(chatService, reminderService, carPlateService);
     await webServer.init();
     await webServer.start();
 

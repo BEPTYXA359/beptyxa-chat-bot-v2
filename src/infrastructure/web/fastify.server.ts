@@ -7,15 +7,23 @@ import { ChatService } from '../../modules/chat/chat.service';
 import { settingsRoutes } from './routes/settings.routes';
 import { reminderRoutes } from './routes/reminder.routes';
 import { ReminderService } from '../../modules/reminder/reminder.service';
+import { carPlateRoutes } from './routes/car-plate.routes';
+import { CarPlateService } from '../../modules/car-plate/car-plate.service';
 
 export class WebServer {
   public readonly app: FastifyInstance;
   private readonly chatService: ChatService;
   private readonly reminderService: ReminderService;
+  private readonly carPlateService: CarPlateService;
 
-  constructor(chatService: ChatService, reminderService: ReminderService) {
+  constructor(
+    chatService: ChatService,
+    reminderService: ReminderService,
+    carPlateService: CarPlateService,
+  ) {
     this.chatService = chatService;
     this.reminderService = reminderService;
+    this.carPlateService = carPlateService;
     this.app = Fastify({
       logger: true,
       trustProxy: true,
@@ -47,6 +55,11 @@ export class WebServer {
       protectedInstance.register(reminderRoutes, {
         prefix: '/api/reminders',
         reminderService: this.reminderService,
+      });
+
+      protectedInstance.register(carPlateRoutes, {
+        prefix: '/api/car-plates',
+        carPlateService: this.carPlateService,
       });
     });
   }
