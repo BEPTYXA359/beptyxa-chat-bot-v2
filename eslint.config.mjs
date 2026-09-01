@@ -18,7 +18,7 @@ export default tseslint.config(
                 ...globals.node,
             },
             parserOptions: {
-                project: true,
+                project: './tsconfig.eslint.json',
                 tsconfigRootDir: import.meta.dirname,
             },
         },

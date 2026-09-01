@@ -2,6 +2,7 @@ import { Bot, HearsContext } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { splitMessage } from '../../shared/utils/text.util';
+import { convertLatexToRichMarkdown, mapLatexStream } from '../../shared/utils/math-converter.util';
 import { GPTProvider } from './chat.types';
 import { config } from '../../shared/config';
 
@@ -176,12 +177,12 @@ const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvide
 
     if (isStreaming) {
       const stream = ctx.services.chat.processGptRequestStream(chatId, prompt, provider);
-      await ctx.replyWithMarkdownStream(stream, undefined, {
+      await ctx.replyWithMarkdownStream(mapLatexStream(stream), undefined, {
         reply_parameters: { message_id: ctx.msg.message_id },
       });
     } else {
       const reply = await ctx.services.chat.processGptRequest(chatId, prompt, provider);
-      const messages = splitMessage(reply);
+      const messages = splitMessage(convertLatexToRichMarkdown(reply));
       for (const msg of messages) {
         await ctx.replyWithRichMessage(
           { markdown: msg },
