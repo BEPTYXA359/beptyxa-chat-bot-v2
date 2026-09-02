@@ -58,4 +58,11 @@ export class CurrencyService {
 
     return (amount / rateFrom) * rateTo;
   }
+
+  public getRates(): { base: string; rates: Record<string, number> } | null {
+    if (Object.keys(this.rates).length === 0) {
+      return null;
+    }
+    return { base: this.baseCurrency, rates: this.rates };
+  }
 }

@@ -5,6 +5,12 @@ import { logger } from '../../shared/logger';
 import { Bot, GrammyError } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { TelegramUser } from '../../shared/types/telegram.types';
+import {
+  getTzOffsetMs,
+  getTzParts,
+  MSK_TIMEZONE,
+  wallClockInstant,
+} from '../../shared/utils/timezone.util';
 import { SteamService } from '../steam/steam.service';
 
 type Schedulable = Pick<ReminderDocument, 'frequency' | 'time' | 'specificDays' | 'timezone'>;
@@ -13,7 +19,7 @@ type SteamReleaseDateParts = { day: number; month: number; year: number };
 
 export type SteamSubscribeResult = 'created' | 'added' | 'already';
 
-const STEAM_RELEASE_TIMEZONE = 'Europe/Moscow';
+const STEAM_RELEASE_TIMEZONE = MSK_TIMEZONE;
 const STEAM_RELEASE_HOUR = 12;
 // Steam часто разблокирует игры позже полуночи; если в день выхода игра ещё
 // не доступна в полдень, повторяем проверку вечером того же дня
@@ -163,11 +169,12 @@ export class ReminderService {
       this.isSameDate(newParts, today) &&
       this.getNowHourMsk() < STEAM_RELEASE_RETRY_HOUR
     ) {
-      const runAt = this.wallClockInstant(
+      const runAt = wallClockInstant(
         today.day,
         today.month,
         today.year,
         STEAM_RELEASE_RETRY_HOUR,
+        STEAM_RELEASE_TIMEZONE,
       );
       await this.rescheduleSteamReminder(reminderId, chatId, appId, runAt);
       return;
@@ -436,32 +443,32 @@ export class ReminderService {
   }
 
   private steamReleaseRunAt(parts: SteamReleaseDateParts): Date {
-    const runAt = this.wallClockInstant(parts.day, parts.month, parts.year, STEAM_RELEASE_HOUR);
+    const runAt = wallClockInstant(
+      parts.day,
+      parts.month,
+      parts.year,
+      STEAM_RELEASE_HOUR,
+      STEAM_RELEASE_TIMEZONE,
+    );
     if (runAt.getTime() <= Date.now()) {
       return new Date(Date.now() + 60_000);
     }
     return runAt;
   }
 
-  private wallClockInstant(day: number, month: number, year: number, hours: number): Date {
-    const wallAsUtc = Date.UTC(year, month - 1, day, hours, 0, 0, 0);
-    const offsetMs = this.getTzOffsetMs(new Date(wallAsUtc), STEAM_RELEASE_TIMEZONE);
-    return new Date(wallAsUtc - offsetMs);
-  }
-
   private getTodayParts(): SteamReleaseDateParts {
-    const parts = this.getTzParts(new Date(), STEAM_RELEASE_TIMEZONE);
+    const parts = getTzParts(new Date(), STEAM_RELEASE_TIMEZONE);
     return { day: parts.d, month: parts.m, year: parts.y };
   }
 
   private getNowHourMsk(): number {
-    return this.getTzParts(new Date(), STEAM_RELEASE_TIMEZONE).h;
+    return getTzParts(new Date(), STEAM_RELEASE_TIMEZONE).h;
   }
 
   private scheduledReleaseParts(time: string): SteamReleaseDateParts | null {
     const instant = new Date(time);
     if (Number.isNaN(instant.getTime())) return null;
-    const parts = this.getTzParts(instant, STEAM_RELEASE_TIMEZONE);
+    const parts = getTzParts(instant, STEAM_RELEASE_TIMEZONE);
     return { day: parts.d, month: parts.m, year: parts.y };
   }
 
@@ -564,8 +571,8 @@ export class ReminderService {
 
   private nextOccurrence(hours: number, minutes: number, timezone: string): Date {
     const now = new Date();
-    const offsetMs = this.getTzOffsetMs(now, timezone);
-    const parts = this.getTzParts(now, timezone);
+    const offsetMs = getTzOffsetMs(now, timezone);
+    const parts = getTzParts(now, timezone);
 
     let candidateMs = Date.UTC(parts.y, parts.m - 1, parts.d, hours, minutes, 0, 0) - offsetMs;
     if (candidateMs <= now.getTime()) {
@@ -805,8 +812,8 @@ export class ReminderService {
         ? new Set(reminder.specificDays)
         : new Set([0, 1, 2, 3, 4, 5, 6]);
 
-    const offsetMs = this.getTzOffsetMs(now, timezone);
-    const nowParts = this.getTzParts(now, timezone);
+    const offsetMs = getTzOffsetMs(now, timezone);
+    const nowParts = getTzParts(now, timezone);
 
     for (let back = 0; back < 8; back++) {
       const dayInstant = new Date(
@@ -830,47 +837,5 @@ export class ReminderService {
     }
 
     return null;
-  }
-
-  private getTzParts(
-    instant: Date,
-    timezone: string,
-  ): {
-    y: number;
-    m: number;
-    d: number;
-    h: number;
-    mi: number;
-    s: number;
-  } {
-    const formatter = new Intl.DateTimeFormat('en-GB', {
-      timeZone: timezone,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    const collected: Record<string, number> = {};
-    for (const part of formatter.formatToParts(instant)) {
-      if (part.type === 'literal') continue;
-      collected[part.type] = Number(part.value);
-    }
-    return {
-      y: collected.year,
-      m: collected.month,
-      d: collected.day,
-      h: collected.hour,
-      mi: collected.minute,
-      s: collected.second,
-    };
-  }
-
-  private getTzOffsetMs(instant: Date, timezone: string): number {
-    const parts = this.getTzParts(instant, timezone);
-    const wallAsUtc = Date.UTC(parts.y, parts.m - 1, parts.d, parts.h, parts.mi, parts.s);
-    return wallAsUtc - instant.getTime();
   }
 }

@@ -28,6 +28,11 @@ import { ReminderService } from './modules/reminder/reminder.service';
 import { CarPlateRepository } from './modules/car-plate/car-plate.repository';
 import { CarPlateService } from './modules/car-plate/car-plate.service';
 
+import { SubscriptionRepository } from './modules/subscription/subscription.repository';
+import { SubscriptionSettingsRepository } from './modules/subscription/subscription-settings.repository';
+import { SubscriptionService } from './modules/subscription/subscription.service';
+import { setupSubscriptionCallbacks } from './modules/subscription/subscription.command';
+
 async function bootstrap() {
   try {
     logger.info('Инициализация приложения...');
@@ -69,10 +74,24 @@ async function bootstrap() {
     await carPlateRepository.ensureIndexes();
     const carPlateService = new CarPlateService(carPlateRepository);
 
+    const subscriptionRepository = new SubscriptionRepository(db);
+    const subscriptionSettingsRepository = new SubscriptionSettingsRepository(db);
+    await subscriptionRepository.ensureIndexes();
+    await subscriptionSettingsRepository.ensureIndexes();
+    const subscriptionService = new SubscriptionService(
+      subscriptionRepository,
+      subscriptionSettingsRepository,
+      agenda,
+      bot,
+      currencyService,
+    );
+
     await agenda.start();
     await reminderService.scheduleSteamCheckJob();
     await reminderService.reconcileJobs();
     await reminderService.catchUpMissed();
+    await subscriptionService.scheduleSubscriptionCheckJob();
+    await subscriptionService.repairSubscriptions();
 
     bot.use(async (ctx, next) => {
       ctx.services = {
@@ -85,6 +104,7 @@ async function bootstrap() {
 
     setupSteamCommands(bot, reminderService);
     setupChatCommands(bot);
+    setupSubscriptionCallbacks(bot, subscriptionService);
 
     const queryRouter = new QueryRouterService(groqProvider);
     setupInlineCommands(bot, queryRouter);
@@ -102,7 +122,13 @@ async function bootstrap() {
       },
     });
 
-    const webServer = new WebServer(chatService, reminderService, carPlateService);
+    const webServer = new WebServer(
+      chatService,
+      reminderService,
+      carPlateService,
+      subscriptionService,
+      currencyService,
+    );
     await webServer.init();
     await webServer.start();
 

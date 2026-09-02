@@ -9,21 +9,31 @@ import { reminderRoutes } from './routes/reminder.routes';
 import { ReminderService } from '../../modules/reminder/reminder.service';
 import { carPlateRoutes } from './routes/car-plate.routes';
 import { CarPlateService } from '../../modules/car-plate/car-plate.service';
+import { subscriptionRoutes } from './routes/subscription.routes';
+import { SubscriptionService } from '../../modules/subscription/subscription.service';
+import { currencyRoutes } from './routes/currency.routes';
+import { CurrencyService } from '../../modules/currency/currency.service';
 
 export class WebServer {
   public readonly app: FastifyInstance;
   private readonly chatService: ChatService;
   private readonly reminderService: ReminderService;
   private readonly carPlateService: CarPlateService;
+  private readonly subscriptionService: SubscriptionService;
+  private readonly currencyService: CurrencyService;
 
   constructor(
     chatService: ChatService,
     reminderService: ReminderService,
     carPlateService: CarPlateService,
+    subscriptionService: SubscriptionService,
+    currencyService: CurrencyService,
   ) {
     this.chatService = chatService;
     this.reminderService = reminderService;
     this.carPlateService = carPlateService;
+    this.subscriptionService = subscriptionService;
+    this.currencyService = currencyService;
     this.app = Fastify({
       logger: true,
       trustProxy: true,
@@ -60,6 +70,16 @@ export class WebServer {
       protectedInstance.register(carPlateRoutes, {
         prefix: '/api/car-plates',
         carPlateService: this.carPlateService,
+      });
+
+      protectedInstance.register(subscriptionRoutes, {
+        prefix: '/api/subscriptions',
+        subscriptionService: this.subscriptionService,
+      });
+
+      protectedInstance.register(currencyRoutes, {
+        prefix: '/api/currency',
+        currencyService: this.currencyService,
       });
     });
   }
