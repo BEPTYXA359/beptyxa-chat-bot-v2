@@ -45,10 +45,35 @@ export const SteamApiResponseSchema = z.record(
   }),
 );
 
+// Ответ IStoreBrowseService/GetItems: у bundle-опций цены приходят строками (int64 в JSON)
+export const SteamBrowsePurchaseOptionSchema = z.object({
+  packageid: z.number().optional(),
+  bundleid: z.number().optional(),
+  purchase_option_name: z.string().optional(),
+  final_price_in_cents: z.coerce.number().optional(),
+  bundle_discount_pct: z.number().optional(),
+  price_before_bundle_discount: z.coerce.number().optional(),
+  included_game_count: z.number().optional(),
+});
+
+export const SteamBrowseItemSchema = z.object({
+  success: z.number().optional(),
+  purchase_options: z.array(SteamBrowsePurchaseOptionSchema).default([]),
+});
+
+export const SteamBrowseResponseSchema = z.object({
+  response: z.object({
+    store_items: z.array(SteamBrowseItemSchema).default([]),
+  }),
+});
+
+export type SteamBrowsePurchaseOption = z.infer<typeof SteamBrowsePurchaseOptionSchema>;
+
 export type SteamApiResponse = z.infer<typeof SteamApiResponseSchema>;
 export type SteamGameDetails = z.infer<typeof SteamGameDetailsSchema>;
 
 export const REQUEST_DELAY_MS = 1000;
+export const BUNDLE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 export interface EditionInfo {
   name: string;

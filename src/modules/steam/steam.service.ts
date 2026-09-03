@@ -1,6 +1,15 @@
 import { CurrencyService } from '../currency/currency.service';
-import { SteamApiResponseSchema, EditionInfo, REQUEST_DELAY_MS } from './steam.types';
+import {
+  BUNDLE_CACHE_TTL_MS,
+  EditionInfo,
+  REQUEST_DELAY_MS,
+  SteamApiResponseSchema,
+  SteamBrowsePurchaseOption,
+  SteamBrowseResponseSchema,
+} from './steam.types';
 import { logger } from '../../shared/logger';
+import { pluralRu } from '../../shared/utils/text.util';
+import { cleanSteamName, stripGameNamePrefix } from './names.util';
 
 const RELEASE_DATE_MONTHS: Record<string, number> = {
   янв: 0,
@@ -31,6 +40,7 @@ const RELEASE_DATE_MONTHS: Record<string, number> = {
 
 export class SteamService {
   private lastRequestTime = 0;
+  private bundlesCache = new Map<string, { bundles: EditionInfo[]; fetchedAt: number }>();
 
   constructor(private readonly currencyService: CurrencyService) {}
 
@@ -189,6 +199,87 @@ export class SteamService {
     return dlcs;
   }
 
+  public async getBundlesInfo(appId: string, gameName?: string): Promise<EditionInfo[]> {
+    const cached = this.bundlesCache.get(appId);
+    if (cached && Date.now() - cached.fetchedAt < BUNDLE_CACHE_TTL_MS) {
+      return cached.bundles;
+    }
+
+    const inputJson = encodeURIComponent(
+      JSON.stringify({
+        ids: [{ appid: Number(appId) }],
+        context: { country_code: 'KZ', language: 'russian' },
+        data_request: { include_all_purchase_options: true },
+      }),
+    );
+
+    try {
+      const response = await this.throttledFetch(
+        `https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=${inputJson}`,
+      );
+      const rawData = await response.json();
+      const parsed = SteamBrowseResponseSchema.parse(rawData);
+      const item = parsed.response.store_items[0];
+
+      if (item?.success !== 1) return [];
+
+      const bundles = item.purchase_options
+        .map((option) => this.bundleOptionToEdition(option, gameName))
+        .filter((bundle): bundle is EditionInfo => bundle !== null);
+
+      this.bundlesCache.set(appId, { bundles, fetchedAt: Date.now() });
+
+      return bundles;
+    } catch (error) {
+      logger.warn({ err: error, appId }, 'Ошибка при получении бандлов');
+      return [];
+    }
+  }
+
+  private bundleOptionToEdition(
+    option: SteamBrowsePurchaseOption,
+    gameName?: string,
+  ): EditionInfo | null {
+    if (
+      option.bundleid === undefined ||
+      option.purchase_option_name === undefined ||
+      option.final_price_in_cents === undefined
+    ) {
+      return null;
+    }
+
+    const finalPriceKzt = option.final_price_in_cents / 100;
+    const isFree = finalPriceKzt === 0;
+    const discountPercent =
+      option.bundle_discount_pct !== undefined && option.bundle_discount_pct > 0
+        ? option.bundle_discount_pct
+        : null;
+    const originalPriceKzt =
+      discountPercent !== null && option.price_before_bundle_discount !== undefined
+        ? option.price_before_bundle_discount / 100
+        : null;
+
+    const count = option.included_game_count;
+    const itemsSuffix =
+      count !== undefined && count > 0
+        ? ` (${count} ${pluralRu(count, 'игра', 'игры', 'игр')})`
+        : '';
+
+    const cleanedBundleName = cleanSteamName(option.purchase_option_name);
+    const trimmedName = gameName
+      ? stripGameNamePrefix(option.purchase_option_name, gameName)
+      : cleanedBundleName;
+
+    return {
+      name: `${trimmedName || cleanedBundleName}${itemsSuffix}`,
+      originalPriceKzt,
+      finalPriceKzt,
+      discountPercent,
+      finalPriceRub: isFree ? 0 : this.currencyService.convert(finalPriceKzt, 'KZT', 'RUB'),
+      isFree,
+    };
+  }
+
   public formatGameInline(
     editions: EditionInfo[],
     subscriptions: EditionInfo[],
@@ -321,6 +412,27 @@ export class SteamService {
     return lines.join('\n');
   }
 
+  public formatBundlesTable(bundles: EditionInfo[]): string {
+    const lines: string[] = [];
+    lines.push('');
+    lines.push('<h4>Бандлы</h4>');
+
+    const rows = bundles
+      .map((bundle) => {
+        const name = this.escapeHtml(bundle.name);
+        if (bundle.isFree) {
+          return `<tr><td align="left">${name}</td><td align="center" colspan="2">Бесплатно</td></tr>`;
+        }
+        return `<tr><td align="left">${name}</td><td align="center">${this.formatKztPriceHtml(bundle)}</td><td align="right">${this.formatRubPriceHtml(bundle)}</td></tr>`;
+      })
+      .join('');
+
+    lines.push(
+      `<table bordered striped><tr><th align="center">Название</th><th align="center" colspan="2">Цена</th></tr>${rows}</table>`,
+    );
+    return lines.join('\n');
+  }
+
   private formatTable(items: EditionInfo[], firstColumn: string = 'Название'): string {
     const rows = items.map((item) => {
       const name = this.escapeHtml(item.name);
@@ -398,19 +510,9 @@ export class SteamService {
   }
 
   private formatEditionName(rawName: string, gameName: string): string {
-    const cleanedGameName = gameName.replace(/[®™©]/g, '');
     let name = rawName.replace(/<[^>]*>/g, '');
     name = name.replace(/\s*-\s*[\d\s]+₸(?:\s*[\d\s]+₸)?\s*$/, '');
-    name = name.replace(/\s+/g, ' ').trim();
-    name = name.replace(/[®™©]/g, '');
-
-    if (name.toLowerCase().startsWith(cleanedGameName.toLowerCase())) {
-      name = name.slice(cleanedGameName.length);
-    }
-
-    name = name.replace(/^[:\s-]+/, '').trim();
-
-    return name || 'Базовая игра';
+    return stripGameNamePrefix(name, gameName) || 'Базовая игра';
   }
 
   private formatSubscriptionName(rawName: string): string {

@@ -45,17 +45,21 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
       await ctx.replyWithChatAction('typing');
 
       const info = await ctx.services.steam.getGameInfo(appId);
+      const bundles = await ctx.services.steam.getBundlesInfo(appId, info.gameName);
 
-      const message = ctx.services.steam.formatGameMessage(
-        info.editions,
-        info.subscriptions,
-        info.headerImage,
-        info.gameName,
-        info.hasRussianLanguage,
-        info.releaseDate,
-        info.isComingSoon,
-        info.isGameFree,
-      );
+      const bundlesSection =
+        bundles.length > 0 ? ctx.services.steam.formatBundlesTable(bundles) : '';
+      const message =
+        ctx.services.steam.formatGameMessage(
+          info.editions,
+          info.subscriptions,
+          info.headerImage,
+          info.gameName,
+          info.hasRussianLanguage,
+          info.releaseDate,
+          info.isComingSoon,
+          info.isGameFree,
+        ) + bundlesSection;
 
       if (!message.trim()) {
         await ctx.reply('Информация о ценах не найдена.', {
@@ -113,9 +117,14 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
           info.isGameFree,
         );
 
+      // бандлы показываются в карточке сразу — при пересборке держим секцию перед DLC
+      const bundles = await ctx.services.steam.getBundlesInfo(appId, info.gameName);
+      const bundlesSection =
+        bundles.length > 0 ? ctx.services.steam.formatBundlesTable(bundles) : '';
+
       if (info.dlcIds.length === 0) {
         await ctx.editMessageText(
-          { markdown: formatMainMessage() },
+          { markdown: formatMainMessage() + bundlesSection },
           {
             reply_markup: buildGameKeyboard(ctx.services.steam, appId, info, {
               includeDlc: false,
@@ -144,7 +153,9 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
           });
         },
       );
-      const fullMessage = formatMainMessage() + ctx.services.steam.formatDlcTable(dlcs);
+
+      const fullMessage =
+        formatMainMessage() + bundlesSection + ctx.services.steam.formatDlcTable(dlcs);
 
       await ctx.editMessageText(
         { markdown: fullMessage },
