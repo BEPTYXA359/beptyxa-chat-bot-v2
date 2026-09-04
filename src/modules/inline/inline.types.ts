@@ -1,5 +1,5 @@
 export const INTENTS = ['currency_convert', 'ai_chat', 'steam_info', 'unknown'] as const;
-export type Intent = typeof INTENTS[number];
+export type Intent = (typeof INTENTS)[number];
 
 export interface RouterResult {
   intent: Exclude<Intent, 'unknown'>;
