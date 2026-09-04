@@ -171,7 +171,7 @@ export const setupInlineCommands = (bot: Bot<BotContext>, router: QueryRouterSer
     }
 
     try {
-      const routerResult = await router.route(query);
+      const routerResult = await router.route(query, userId);
 
       if (routerResult.intent === 'ai_chat' && isRedundant(userId, query)) {
         await ctx.answerInlineQuery([helpArticle()], { cache_time: 0 });
@@ -182,7 +182,7 @@ export const setupInlineCommands = (bot: Bot<BotContext>, router: QueryRouterSer
 
       switch (routerResult.intent) {
         case 'currency_convert':
-          articles = await handleCurrency(query, routerResult, services);
+          articles = await handleCurrency(query, routerResult, services, userId);
           break;
         case 'steam_info':
           articles = routerResult.steamAppId
@@ -190,7 +190,7 @@ export const setupInlineCommands = (bot: Bot<BotContext>, router: QueryRouterSer
             : [helpArticle()];
           break;
         case 'ai_chat':
-          articles = await handleAiChat(query, services);
+          articles = await handleAiChat(query, services, userId);
           break;
         default:
           articles = [helpArticle()];
@@ -211,6 +211,7 @@ async function handleCurrency(
   query: string,
   routerResult: RouterResult,
   services: BotContext['services'],
+  userId: number,
 ): Promise<InlineQueryResultArticle[]> {
   try {
     let amount: number;
@@ -222,7 +223,7 @@ async function handleCurrency(
       from = routerResult.from;
       to = routerResult.to || 'RUB';
     } else {
-      const parsed = await services.chat.parseCurrency(query);
+      const parsed = await services.chat.parseCurrency(query, userId);
       if (!parsed || !parsed.amount || !parsed.from) {
         return [currencyErrorArticle()];
       }
@@ -242,9 +243,10 @@ async function handleCurrency(
 async function handleAiChat(
   query: string,
   services: BotContext['services'],
+  userId: number,
 ): Promise<InlineQueryResultArticle[]> {
   try {
-    const response = await services.chat.processGptRequestSimple(query);
+    const response = await services.chat.processGptRequestSimple(query, userId);
     return [aiArticle(query, response)];
   } catch (error) {
     logger.error({ err: error, query }, 'inline: ошибка AI чата');

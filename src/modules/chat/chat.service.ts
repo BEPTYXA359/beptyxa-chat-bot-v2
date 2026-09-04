@@ -1,9 +1,11 @@
 import { ChatRepository } from './chat.repository';
-import { OpenAiProvider } from '../../infrastructure/llm/openai.provider';
+import { OpenAiProvider, LlmUsageCallback } from '../../infrastructure/llm/openai.provider';
 import { ChatMessage, ChatSettings, GPTProvider } from './chat.types';
 import { CryptoService } from '../../shared/services/crypto.service';
 import { logger } from '../../shared/logger';
 import { GroqProvider } from '../../infrastructure/llm/groq.provider';
+import { LlmUsageService } from '../llm-usage/llm-usage.service';
+import { LlmUsageSource } from '../llm-usage/llm-usage.types';
 
 interface TelegramChatMemberResponse {
   ok: boolean;
@@ -26,7 +28,12 @@ export class ChatService {
     private readonly openaiProvider: OpenAiProvider,
     private readonly groqProvider: GroqProvider,
     private readonly cryptoService: CryptoService,
+    private readonly llmUsageService: LlmUsageService,
   ) {}
+
+  private usageRecorder(chatId: number, source: LlmUsageSource): LlmUsageCallback {
+    return (usage) => void this.llmUsageService.record(chatId, usage, source);
+  }
 
   public async recordChatterboxHistory(chatId: number, text: string): Promise<ChatSettings | null> {
     const chat = await this.chatRepository.getChat(chatId);
@@ -83,9 +90,13 @@ export class ChatService {
           messagesForLlm,
           decryptedKey,
           chat.settings.openAiModel,
+          this.usageRecorder(chatId, 'chat'),
         );
       } else if (provider === 'Groq') {
-        reply = await this.groqProvider.generateText(messagesForLlm);
+        reply = await this.groqProvider.generateText(
+          messagesForLlm,
+          this.usageRecorder(chatId, 'chat'),
+        );
       } else {
         throw new Error(`Неизвестный провайдер: ${provider}`);
       }
@@ -134,8 +145,12 @@ export class ChatService {
               messagesForLlm,
               this.cryptoService.decrypt(chat.settings.openAiApiKey!),
               chat.settings.openAiModel,
+              this.usageRecorder(chatId, 'chat'),
             )
-          : await this.groqProvider.generateTextStream(messagesForLlm);
+          : await this.groqProvider.generateTextStream(
+              messagesForLlm,
+              this.usageRecorder(chatId, 'chat'),
+            );
 
       let buffer = '';
       for await (const chunk of stream) {
@@ -194,6 +209,7 @@ export class ChatService {
         messagesForLlm,
         decryptedKey,
         chat.settings.openAiModel,
+        this.usageRecorder(chatId, 'chatterbox'),
       );
 
       await this.chatRepository.addChatterboxMessage(chatId, 'assistant', reply);
@@ -204,7 +220,7 @@ export class ChatService {
     }
   }
 
-  public async processGptRequestSimple(query: string): Promise<string> {
+  public async processGptRequestSimple(query: string, scopeId?: number): Promise<string> {
     const messages: Omit<ChatMessage, 'timestamp'>[] = [
       {
         role: 'system',
@@ -212,11 +228,17 @@ export class ChatService {
       },
       { role: 'user', content: query },
     ];
-    return this.groqProvider.generateText(messages);
+    return this.groqProvider.generateText(
+      messages,
+      scopeId ? this.usageRecorder(scopeId, 'inline_chat') : undefined,
+    );
   }
 
-  public async parseCurrency(query: string) {
-    return this.groqProvider.parseCurrencyQuery(query);
+  public async parseCurrency(query: string, scopeId?: number) {
+    return this.groqProvider.parseCurrencyQuery(
+      query,
+      scopeId ? this.usageRecorder(scopeId, 'currency_parse') : undefined,
+    );
   }
 
   public async getChatInfo(chatId: number) {

@@ -1,12 +1,16 @@
 import OpenAI from 'openai';
 import { logger } from '../../shared/logger';
 import { ChatMessage } from '../../modules/chat/chat.types';
+import { LlmTokenUsage } from '../../modules/llm-usage/llm-usage.types';
+
+export type LlmUsageCallback = (usage: LlmTokenUsage) => void;
 
 export class OpenAiProvider {
   public async generateText(
     messages: Omit<ChatMessage, 'timestamp'>[],
     apiKey: string,
     model: string,
+    onUsage?: LlmUsageCallback,
   ): Promise<string> {
     try {
       const client = new OpenAI({ apiKey });
@@ -15,6 +19,15 @@ export class OpenAiProvider {
         model,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
       });
+
+      if (onUsage) {
+        onUsage({
+          provider: 'OpenAi',
+          model,
+          promptTokens: response.usage?.prompt_tokens ?? 0,
+          completionTokens: response.usage?.completion_tokens ?? 0,
+        });
+      }
 
       return response.choices[0]?.message?.content || 'Извините, я не смог сгенерировать ответ.';
     } catch (error) {
@@ -27,6 +40,7 @@ export class OpenAiProvider {
     messages: Omit<ChatMessage, 'timestamp'>[],
     apiKey: string,
     model: string,
+    onUsage?: LlmUsageCallback,
   ): AsyncIterable<string> {
     const client = new OpenAI({ apiKey });
 
@@ -34,11 +48,28 @@ export class OpenAiProvider {
       model,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
+      stream_options: { include_usage: true },
     });
+
+    let reported = false;
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
       if (content) yield content;
+
+      if (onUsage && chunk.usage) {
+        onUsage({
+          provider: 'OpenAi',
+          model,
+          promptTokens: chunk.usage.prompt_tokens ?? 0,
+          completionTokens: chunk.usage.completion_tokens ?? 0,
+        });
+        reported = true;
+      }
+    }
+
+    if (onUsage && !reported) {
+      onUsage({ provider: 'OpenAi', model, promptTokens: 0, completionTokens: 0 });
     }
   }
 

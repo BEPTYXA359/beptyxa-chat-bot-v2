@@ -13,6 +13,8 @@ import { subscriptionRoutes } from './routes/subscription.routes';
 import { SubscriptionService } from '../../modules/subscription/subscription.service';
 import { currencyRoutes } from './routes/currency.routes';
 import { CurrencyService } from '../../modules/currency/currency.service';
+import { llmUsageRoutes } from './routes/llm-usage.routes';
+import { LlmUsageService } from '../../modules/llm-usage/llm-usage.service';
 
 export class WebServer {
   public readonly app: FastifyInstance;
@@ -21,6 +23,7 @@ export class WebServer {
   private readonly carPlateService: CarPlateService;
   private readonly subscriptionService: SubscriptionService;
   private readonly currencyService: CurrencyService;
+  private readonly llmUsageService: LlmUsageService;
 
   constructor(
     chatService: ChatService,
@@ -28,12 +31,14 @@ export class WebServer {
     carPlateService: CarPlateService,
     subscriptionService: SubscriptionService,
     currencyService: CurrencyService,
+    llmUsageService: LlmUsageService,
   ) {
     this.chatService = chatService;
     this.reminderService = reminderService;
     this.carPlateService = carPlateService;
     this.subscriptionService = subscriptionService;
     this.currencyService = currencyService;
+    this.llmUsageService = llmUsageService;
     this.app = Fastify({
       logger: true,
       trustProxy: true,
@@ -80,6 +85,12 @@ export class WebServer {
       protectedInstance.register(currencyRoutes, {
         prefix: '/api/currency',
         currencyService: this.currencyService,
+      });
+
+      protectedInstance.register(llmUsageRoutes, {
+        prefix: '/api/llm-usage',
+        llmUsageService: this.llmUsageService,
+        chatService: this.chatService,
       });
     });
   }

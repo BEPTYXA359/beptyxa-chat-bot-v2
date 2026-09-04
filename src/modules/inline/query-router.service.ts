@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 import { logger } from '../../shared/logger';
 import { RouterResult } from './inline.types';
+import { LlmUsageService } from '../llm-usage/llm-usage.service';
 
 const routerResponseSchema = z.object({
   intent: z.enum(['currency_convert', 'ai_chat']),
@@ -34,15 +35,18 @@ const CURRENCY_NUMBER_REGEX = /^\d+\s*(usd|eur|rub|kzt|gel|cny|бакс|долл
 const CURRENCY_COMMAND_REGEX = /^конвертер\s+/i;
 
 export class QueryRouterService {
-  constructor(private readonly groqProvider: GroqProvider) {}
+  constructor(
+    private readonly groqProvider: GroqProvider,
+    private readonly llmUsageService: LlmUsageService,
+  ) {}
 
-  public async route(query: string): Promise<RouterResult> {
+  public async route(query: string, scopeId?: number): Promise<RouterResult> {
     const trimmed = query.trim();
 
     const fastResult = this.fastPath(trimmed);
     if (fastResult) return fastResult;
 
-    return this.groqRoute(trimmed);
+    return this.groqRoute(trimmed, scopeId);
   }
 
   private fastPath(query: string): RouterResult | null {
@@ -67,12 +71,15 @@ export class QueryRouterService {
     return null;
   }
 
-  private async groqRoute(query: string): Promise<RouterResult> {
+  private async groqRoute(query: string, scopeId?: number): Promise<RouterResult> {
     try {
       const result = await this.groqProvider.generateStructured(
         ROUTER_SYSTEM_PROMPT,
         query,
         routerResponseSchema,
+        scopeId
+          ? (usage) => void this.llmUsageService.record(scopeId, usage, 'inline_router')
+          : undefined,
       );
 
       if (!result || result.confidence < 0.5) {

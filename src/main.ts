@@ -33,6 +33,9 @@ import { SubscriptionSettingsRepository } from './modules/subscription/subscript
 import { SubscriptionService } from './modules/subscription/subscription.service';
 import { setupSubscriptionCallbacks } from './modules/subscription/subscription.command';
 
+import { LlmUsageRepository } from './modules/llm-usage/llm-usage.repository';
+import { LlmUsageService } from './modules/llm-usage/llm-usage.service';
+
 async function bootstrap() {
   try {
     logger.info('Инициализация приложения...');
@@ -56,12 +59,17 @@ async function bootstrap() {
 
     const steamService = new SteamService(currencyService);
 
+    const llmUsageRepository = new LlmUsageRepository(db);
+    await llmUsageRepository.ensureIndexes();
+    const llmUsageService = new LlmUsageService(llmUsageRepository);
+
     const chatRepository = new ChatRepository(db);
     const chatService = new ChatService(
       chatRepository,
       openAiProvider,
       groqProvider,
       cryptoService,
+      llmUsageService,
     );
 
     const bot = createBot();
@@ -106,7 +114,7 @@ async function bootstrap() {
     setupChatCommands(bot);
     setupSubscriptionCallbacks(bot, subscriptionService);
 
-    const queryRouter = new QueryRouterService(groqProvider);
+    const queryRouter = new QueryRouterService(groqProvider, llmUsageService);
     setupInlineCommands(bot, queryRouter);
 
     bot.catch((err) => {
@@ -128,6 +136,7 @@ async function bootstrap() {
       carPlateService,
       subscriptionService,
       currencyService,
+      llmUsageService,
     );
     await webServer.init();
     await webServer.start();

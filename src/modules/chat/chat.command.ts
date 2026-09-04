@@ -49,7 +49,7 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     try {
       await ctx.replyWithChatAction('typing');
 
-      const parsedData = await ctx.services.chat.parseCurrency(query);
+      const parsedData = await ctx.services.chat.parseCurrency(query, ctx.chat.id);
 
       if (!parsedData || !parsedData.amount || !parsedData.from) {
         return ctx.reply(
