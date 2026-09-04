@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const MAX_SYSTEM_PROMPT_LENGTH = 4000;
+
 export const RoleSchema = z.enum(['system', 'user', 'assistant']);
 export type Role = z.infer<typeof RoleSchema>;
 
@@ -15,8 +17,8 @@ export const ChatSettingsSchema = z.object({
   isChatterboxEnabled: z.boolean().default(false),
   isStreamingEnabled: z.boolean().default(false),
   openAiApiKey: z.string().optional(),
-  llmSystemPrompt: z.string().optional(),
-  chatterboxSystemPrompt: z.string().optional(),
+  llmSystemPrompt: z.string().max(MAX_SYSTEM_PROMPT_LENGTH).optional(),
+  chatterboxSystemPrompt: z.string().max(MAX_SYSTEM_PROMPT_LENGTH).optional(),
   openAiModel: z.string().default('gpt-4o-mini'),
   chatterboxChance: z.number().min(0).max(1).default(0.02),
 });
