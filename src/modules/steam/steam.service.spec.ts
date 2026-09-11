@@ -35,6 +35,12 @@ const browseResponse = {
             price_before_bundle_discount: '3590000',
             included_game_count: 20,
           },
+          {
+            bundleid: 234,
+            purchase_option_name: 'Left 4 Dead 2 Deluxe Bundle',
+            final_price_in_cents: '580000',
+            included_game_count: 1,
+          },
         ],
       },
     ],
@@ -70,19 +76,28 @@ describe('getBundlesInfo', () => {
         finalPriceRub: 30,
         isFree: false,
       },
+      {
+        name: 'Left 4 Dead 2 Deluxe Bundle (1 игра)',
+        originalPriceKzt: null,
+        finalPriceKzt: 5800,
+        discountPercent: null,
+        finalPriceRub: 30,
+        isFree: false,
+      },
     ]);
     vi.unstubAllGlobals();
   });
 
-  it('обрезает название игры из имени бандла, если передано gameName', async () => {
+  it('обрезает название игры только у бандла с одной игрой', async () => {
     vi.stubGlobal('fetch', getFetchMock(browseResponse));
     const service = createService(() => 30);
 
     const bundles = await service.getBundlesInfo('550', 'Left 4 Dead 2');
 
     expect(bundles.map((bundle) => bundle.name)).toEqual([
-      'Bundle (2 игры)',
+      'Left 4 Dead Bundle (2 игры)',
       'Valve Complete Pack (20 игр)',
+      'Deluxe Bundle (1 игра)',
     ]);
     vi.unstubAllGlobals();
   });

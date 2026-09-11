@@ -266,9 +266,12 @@ export class SteamService {
         : '';
 
     const cleanedBundleName = cleanSteamName(option.purchase_option_name);
-    const trimmedName = gameName
-      ? stripGameNamePrefix(option.purchase_option_name, gameName)
-      : cleanedBundleName;
+    // бандл с одной игрой — по сути издание этой игры, название можно отрезать;
+    // в наборе из нескольких игр имя бандла про франшизу, обрезка лишит его смысла
+    const trimmedName =
+      gameName !== undefined && count === 1
+        ? stripGameNamePrefix(option.purchase_option_name, gameName)
+        : cleanedBundleName;
 
     return {
       name: `${trimmedName || cleanedBundleName}${itemsSuffix}`,
