@@ -11,7 +11,7 @@
 
 ## Возможности
 
-* **🤖 AI-чат** — общение через OpenAI (GPT) и Groq (Llama) с поддержкой streaming в приватных чатах
+* **🤖 AI-чат** — OpenAI, Groq, GLM (Z.ai), DeepSeek, Gemini, Claude, Grok (xAI) и OpenRouter со streaming в приватных чатах; слова-триггеры (`чатгпт`, `грок`, `глм`, …) можно переопределить своим словом в настройках
 * **💱 Конвертация валют** — естественный язык (`конвертер 100 usd в тенге`), курсы с кэшированием и автообновлением
 * **🎮 Цены Steam** — ссылка на игру → цены в KZT/RUB со всеми изданиями, DLC и бандлами
 * **🔍 Inline-режим** — `@BeptyxaChatBot <запрос>` из любого чата: сам определяет валюту, вопрос или Steam
@@ -27,7 +27,7 @@
 * **Bot Framework:** grammY (`auto-retry`, `stream`)
 * **Web Server:** Fastify 5 (REST API для Mini App)
 * **Database:** MongoDB 7
-* **AI Providers:** OpenAI SDK, Groq SDK
+* **AI Providers:** OpenAI SDK (в т.ч. для OpenAI-совместимых API: GLM, DeepSeek, Gemini, Anthropic, xAI, OpenRouter), Groq SDK
 * **Task Scheduling:** Agenda (Mongo-based), node-schedule
 * **Validation & Security:** Zod, AES-256-CBC (шифрование API-ключей), HMAC-SHA-256 (Telegram initData)
 * **Infrastructure:** Docker (multi-stage), Docker Compose, GitHub Actions (CI/CD → SSH deploy)

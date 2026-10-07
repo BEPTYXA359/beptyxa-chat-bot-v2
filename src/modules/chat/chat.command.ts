@@ -1,25 +1,30 @@
-import { Bot, HearsContext } from 'grammy';
+import { Bot } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { splitMessage } from '../../shared/utils/text.util';
 import { convertLatexToRichMarkdown, mapLatexStream } from '../../shared/utils/math-converter.util';
 import { GPTProvider } from './chat.types';
 import { config } from '../../shared/config';
+import {
+  getProviderDef,
+  CHAT_TRIGGER_PROVIDERS,
+} from '../../infrastructure/llm/llm-providers.registry';
+import { detectLlmTrigger } from './llm-triggers.util';
 
 export const setupChatCommands = (bot: Bot<BotContext>) => {
-  bot.hears(/^чатгпт\s+(.+)/i, async (ctx) => {
-    await makeLlmAnswer(ctx, 'OpenAi');
-  });
-
-  bot.hears(/^грок\s+(.+)/i, async (ctx) => {
-    await makeLlmAnswer(ctx, 'Groq');
-  });
-
   bot.on('message:text', async (ctx, next) => {
     const text = ctx.message.text;
     const chatId = ctx.chat.id;
 
-    const settings = await ctx.services.chat.recordChatterboxHistory(chatId, text);
+    const chat = await ctx.services.chat.peekChat(chatId);
+
+    const trigger = detectLlmTrigger(text, chat?.settings);
+    if (trigger) {
+      await makeLlmAnswer(ctx, trigger.provider, trigger.prompt);
+      return;
+    }
+
+    const settings = await ctx.services.chat.recordChatterboxHistory(chatId, text, chat);
 
     if (settings && settings.isChatterboxEnabled) {
       const chance = settings.chatterboxChance ?? 0.02;
@@ -92,8 +97,8 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
   — \`конвертер 100 usd\`, \`50 евро в тенге\`
 
 💬 *AI-чат*
-  — \`чатгпт <вопрос>\` (OpenAI)
-  — \`грок <вопрос>\` (Groq)
+${buildAiChatHelp()}
+  — свои слова-триггеры: /app → Настройки
 
 🎮 *Цены в Steam*
   — отправь ссылку: \`store.steampowered.com/app/…\`
@@ -111,7 +116,7 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
   — в уведомлении кнопки «Оплачено» и «Без напоминаний»
 
 ⚙️ *Настройки*
-  — /app → API ключ OpenAI, системный промпт`,
+  — /app → API ключи провайдеров, системный промпт`,
       { parse_mode: 'Markdown' },
     );
   });
@@ -169,9 +174,11 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
   });
 };
 
-const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvider) => {
-  const prompt = ctx.match[1];
+const makeLlmAnswer = async (ctx: BotContext, provider: GPTProvider, prompt: string) => {
+  if (!ctx.chat || !ctx.msg) return;
+
   const chatId = ctx.chat.id;
+  const displayName = getProviderDef(provider).displayName;
 
   try {
     await ctx.replyWithChatAction('typing');
@@ -196,7 +203,13 @@ const makeLlmAnswer = async (ctx: HearsContext<BotContext>, provider: GPTProvide
       }
     }
   } catch (error) {
-    logger.error({ err: error }, `Критическая ошибка команды ${provider}`);
-    await ctx.reply(`Произошла ошибка при обращении к ${provider}`);
+    logger.error({ err: error }, `Критическая ошибка команды ${displayName}`);
+    await ctx.reply(`Произошла ошибка при обращении к ${displayName}`);
   }
 };
+
+const buildAiChatHelp = (): string =>
+  CHAT_TRIGGER_PROVIDERS.map((provider) => {
+    const def = getProviderDef(provider);
+    return `  — \`${def.keywords[0]} <вопрос>\` (${def.displayName})`;
+  }).join('\n');

@@ -9,7 +9,16 @@ export const LlmUsageSourceSchema = z.enum([
 ]);
 export type LlmUsageSource = z.infer<typeof LlmUsageSourceSchema>;
 
-export const LLM_PROVIDERS = ['OpenAi', 'Groq'] as const;
+export const LLM_PROVIDERS = [
+  'OpenAi',
+  'Groq',
+  'Glm',
+  'DeepSeek',
+  'Gemini',
+  'Anthropic',
+  'Xai',
+  'OpenRouter',
+] as const;
 export type LlmUsageProvider = (typeof LLM_PROVIDERS)[number];
 
 export interface LlmTokenUsage {

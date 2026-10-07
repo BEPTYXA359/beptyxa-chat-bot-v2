@@ -4,10 +4,18 @@ import { ChatService } from '../../../modules/chat/chat.service';
 import { logger } from '../../../shared/logger';
 import { z } from 'zod';
 import { getTargetChatId } from '../utils/request.util';
+import { CHAT_LLM_PROVIDERS } from '../../../infrastructure/llm/llm-providers.registry';
+import { GPTProvider } from '../../../modules/chat/chat.types';
 
 export interface SettingsRoutesOptions {
   chatService: ChatService;
 }
+
+/** Список моделей ограничиваем, чтобы не раздувать ответ (у OpenRouter их сотни) */
+const MAX_MODELS_PER_PROVIDER = 200;
+
+/** Провайдеры, попадающие в настройки: Groq (без своего ключа) + все OpenAI-совместимые */
+const SETTINGS_PROVIDERS: GPTProvider[] = ['Groq', ...CHAT_LLM_PROVIDERS.map((def) => def.id)];
 
 export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
   fastify,
@@ -35,21 +43,53 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
         return reply.status(404).send({ error: 'Чат не найден' });
       }
 
-      let availableModels: Array<string> = [];
-      if (chat.settings.openAiApiKey) {
-        availableModels = await chatService.getAvailableModels(targetChatId);
+      // Ключи не отдаём наружу — только факт наличия, модель и алиас
+      const providers: Record<string, { hasApiKey: boolean; model?: string; alias?: string }> = {};
+      for (const provider of SETTINGS_PROVIDERS) {
+        const stored = chat.settings.llmProviders?.[provider];
+        providers[provider] = {
+          hasApiKey:
+            provider === 'Groq'
+              ? true
+              : provider === 'OpenAi'
+                ? !!(stored?.apiKey || chat.settings.openAiApiKey)
+                : !!stored?.apiKey,
+          model: stored?.model,
+          alias: stored?.alias,
+        };
       }
+
+      // Плоский список моделей OpenAI — для обратной совместимости со старым миниаппом
+      const openAiModels = (await chatService.getAvailableModels(targetChatId, 'OpenAi')).slice(
+        0,
+        MAX_MODELS_PER_PROVIDER,
+      );
+
+      const providerModels: Record<string, Array<string>> = { OpenAi: openAiModels };
+
+      const providersWithKeys = CHAT_LLM_PROVIDERS.filter(
+        (def) => def.id !== 'OpenAi' && chat.settings.llmProviders?.[def.id]?.apiKey,
+      );
+
+      const lists = await Promise.all(
+        providersWithKeys.map((def) => chatService.getAvailableModels(targetChatId, def.id)),
+      );
+      providersWithKeys.forEach((def, index) => {
+        providerModels[def.id] = lists[index].slice(0, MAX_MODELS_PER_PROVIDER);
+      });
 
       return reply.send({
         isOpenAiEnabled: chat.settings.isOpenAiEnabled,
         isChatterboxEnabled: chat.settings.isChatterboxEnabled,
         isStreamingEnabled: chat.settings.isStreamingEnabled,
-        hasOpenAiApiKey: !!chat.settings.openAiApiKey,
+        hasOpenAiApiKey: providers.OpenAi.hasApiKey,
         llmSystemPrompt: chat.settings.llmSystemPrompt,
         chatterboxSystemPrompt: chat.settings.chatterboxSystemPrompt,
-        openAiModel: chat.settings.openAiModel,
+        openAiModel: providers.OpenAi.model || chat.settings.openAiModel,
         chatterboxChance: chat.settings.chatterboxChance,
-        availableModels,
+        providers,
+        availableModels: openAiModels,
+        providerModels,
       });
     } catch (error) {
       logger.error({ err: error, userId }, 'Ошибка получения настроек');

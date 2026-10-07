@@ -1,11 +1,22 @@
 import { ChatRepository } from './chat.repository';
-import { OpenAiProvider, LlmUsageCallback } from '../../infrastructure/llm/openai.provider';
-import { ChatMessage, ChatSettings, GPTProvider } from './chat.types';
+import {
+  OpenAiProvider,
+  LlmUsageCallback,
+  LlmCallOptions,
+} from '../../infrastructure/llm/openai.provider';
+import {
+  ChatDocument,
+  ChatMessage,
+  ChatSettings,
+  GPTProvider,
+  LlmProviderSettings,
+} from './chat.types';
 import { CryptoService } from '../../shared/services/crypto.service';
 import { logger } from '../../shared/logger';
 import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 import { LlmUsageService } from '../llm-usage/llm-usage.service';
-import { LlmUsageSource } from '../llm-usage/llm-usage.types';
+import { LlmUsageProvider, LlmUsageSource } from '../llm-usage/llm-usage.types';
+import { getProviderDef } from '../../infrastructure/llm/llm-providers.registry';
 
 interface TelegramChatMemberResponse {
   ok: boolean;
@@ -22,6 +33,19 @@ interface CacheEntry {
 const adminCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+interface ModelsCacheEntry {
+  models: Array<string>;
+  expiresAt: number;
+}
+const modelsCache = new Map<string, ModelsCacheEntry>();
+const MODELS_CACHE_TTL_MS = 10 * 60 * 1000;
+
+interface ResolvedLlmConfig {
+  apiKey: string | null;
+  model: string;
+  call: LlmCallOptions;
+}
+
 export class ChatService {
   constructor(
     private readonly chatRepository: ChatRepository,
@@ -35,16 +59,50 @@ export class ChatService {
     return (usage) => void this.llmUsageService.record(chatId, usage, source);
   }
 
-  public async recordChatterboxHistory(chatId: number, text: string): Promise<ChatSettings | null> {
-    const chat = await this.chatRepository.getChat(chatId);
+  /**
+   * Ключ, модель и параметры соединения для провайдера.
+   * Для OpenAi хранилище — llmProviders.OpenAi с фолбэком на старые поля openAiApiKey/openAiModel.
+   */
+  private resolveLlmConfig(settings: ChatSettings, provider: GPTProvider): ResolvedLlmConfig {
+    const def = getProviderDef(provider);
+    const stored = settings.llmProviders?.[provider];
 
-    if (!chat) return null;
+    if (provider === 'Groq') {
+      return { apiKey: 'server', model: 'groq', call: { provider } };
+    }
 
-    if (chat.settings.isChatterboxEnabled) {
+    const apiKey =
+      provider === 'OpenAi'
+        ? (stored?.apiKey ?? settings.openAiApiKey ?? null)
+        : (stored?.apiKey ?? null);
+
+    const model =
+      provider === 'OpenAi'
+        ? stored?.model || settings.openAiModel || def.defaultModel
+        : stored?.model || def.defaultModel;
+
+    return {
+      apiKey,
+      model,
+      call: { provider, baseUrl: def.baseUrl, includeUsage: def.supportsStreamOptions },
+    };
+  }
+
+  /** История балабола; chat — предзагруженный документ, чтобы не читать БД повторно */
+  public async recordChatterboxHistory(
+    chatId: number,
+    text: string,
+    chat?: ChatDocument | null,
+  ): Promise<ChatSettings | null> {
+    const chatDocument = chat ?? (await this.chatRepository.getChat(chatId));
+
+    if (!chatDocument) return null;
+
+    if (chatDocument.settings.isChatterboxEnabled) {
       await this.chatRepository.addChatterboxMessage(chatId, 'user', text);
     }
 
-    return chat.settings;
+    return chatDocument.settings;
   }
 
   public async processGptRequest(
@@ -53,15 +111,16 @@ export class ChatService {
     provider: GPTProvider,
   ): Promise<string> {
     const chat = await this.chatRepository.ensureChatExists(chatId);
+    const def = getProviderDef(provider);
 
-    if (provider === 'OpenAi') {
-      if (!chat.settings.isOpenAiEnabled) {
-        return 'Функция ChatGPT отключена в настройках этого чата.';
-      }
+    if (provider === 'OpenAi' && !chat.settings.isOpenAiEnabled) {
+      return 'Функция ChatGPT отключена в настройках этого чата.';
+    }
 
-      if (!chat.settings.openAiApiKey) {
-        return 'У вас не настроен API ключ OpenAI! Добавьте его через Mini App.';
-      }
+    const config = this.resolveLlmConfig(chat.settings, provider);
+
+    if (!config.apiKey) {
+      return `У вас не настроен API ключ ${def.displayName}! Добавьте его через Mini App.`;
     }
 
     await this.chatRepository.addGptMessage(chatId, 'user', prompt);
@@ -82,30 +141,24 @@ export class ChatService {
     });
 
     try {
-      let reply = '';
+      const usageRecorder = this.usageRecorder(chatId, 'chat');
 
-      if (provider === 'OpenAi') {
-        const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey!);
-        reply = await this.openaiProvider.generateText(
-          messagesForLlm,
-          decryptedKey,
-          chat.settings.openAiModel,
-          this.usageRecorder(chatId, 'chat'),
-        );
-      } else if (provider === 'Groq') {
-        reply = await this.groqProvider.generateText(
-          messagesForLlm,
-          this.usageRecorder(chatId, 'chat'),
-        );
-      } else {
-        throw new Error(`Неизвестный провайдер: ${provider}`);
-      }
+      const reply =
+        provider === 'Groq'
+          ? await this.groqProvider.generateText(messagesForLlm, usageRecorder)
+          : await this.openaiProvider.generateText(
+              messagesForLlm,
+              this.cryptoService.decrypt(config.apiKey),
+              config.model,
+              usageRecorder,
+              config.call,
+            );
 
       await this.chatRepository.addGptMessage(chatId, 'assistant', reply);
       return reply;
     } catch (error) {
-      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${provider}`);
-      return `Произошла ошибка при обращении к ${provider}. Попробуйте позже.`;
+      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${def.displayName}`);
+      return `Произошла ошибка при обращении к ${def.displayName}. Попробуйте позже.`;
     }
   }
 
@@ -115,9 +168,11 @@ export class ChatService {
     provider: GPTProvider,
   ): AsyncIterable<string> {
     const chat = await this.chatRepository.ensureChatExists(chatId);
+    const def = getProviderDef(provider);
+    const config = this.resolveLlmConfig(chat.settings, provider);
 
-    if (provider === 'OpenAi' && !chat.settings.openAiApiKey) {
-      yield 'У вас не настроен API ключ OpenAI! Добавьте его через Mini App.';
+    if (!config.apiKey) {
+      yield `У вас не настроен API ключ ${def.displayName}! Добавьте его через Mini App.`;
       return;
     }
 
@@ -139,17 +194,17 @@ export class ChatService {
     let fullText = '';
 
     try {
+      const usageRecorder = this.usageRecorder(chatId, 'chat');
+
       const stream =
-        provider === 'OpenAi'
-          ? await this.openaiProvider.generateTextStream(
+        provider === 'Groq'
+          ? await this.groqProvider.generateTextStream(messagesForLlm, usageRecorder)
+          : await this.openaiProvider.generateTextStream(
               messagesForLlm,
-              this.cryptoService.decrypt(chat.settings.openAiApiKey!),
-              chat.settings.openAiModel,
-              this.usageRecorder(chatId, 'chat'),
-            )
-          : await this.groqProvider.generateTextStream(
-              messagesForLlm,
-              this.usageRecorder(chatId, 'chat'),
+              this.cryptoService.decrypt(config.apiKey),
+              config.model,
+              usageRecorder,
+              config.call,
             );
 
       let buffer = '';
@@ -162,12 +217,12 @@ export class ChatService {
       }
       if (buffer) yield buffer;
     } catch (error) {
-      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${provider}`);
+      logger.error({ err: error, provider }, `Произошла ошибка при обращении к ${def.displayName}`);
 
       if (fullText) {
         yield `\n\n[Ошибка: ответ получен не полностью]`;
       } else {
-        yield `Произошла ошибка при обращении к ${provider}. Попробуйте позже.`;
+        yield `Произошла ошибка при обращении к ${def.displayName}. Попробуйте позже.`;
         return;
       }
     }
@@ -179,13 +234,16 @@ export class ChatService {
   public async triggerChatterboxReply(chatId: number, text: string): Promise<string | null> {
     const chat = await this.chatRepository.getChat(chatId);
 
-    if (!chat || !chat.settings.isChatterboxEnabled || !chat.settings.openAiApiKey) {
+    if (!chat || !chat.settings.isChatterboxEnabled) {
       return null;
     }
 
+    const config = this.resolveLlmConfig(chat.settings, 'OpenAi');
+    if (!config.apiKey) return null;
+
     if (chat.chatterboxMessages.length === 0) return null;
 
-    const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey);
+    const decryptedKey = this.cryptoService.decrypt(config.apiKey);
 
     const messagesForLlm: Omit<ChatMessage, 'timestamp'>[] = chat.chatterboxMessages.map((msg) => ({
       role: msg.role,
@@ -208,8 +266,9 @@ export class ChatService {
       const reply = await this.openaiProvider.generateText(
         messagesForLlm,
         decryptedKey,
-        chat.settings.openAiModel,
+        config.model,
         this.usageRecorder(chatId, 'chatterbox'),
+        config.call,
       );
 
       await this.chatRepository.addChatterboxMessage(chatId, 'assistant', reply);
@@ -245,6 +304,11 @@ export class ChatService {
     return this.chatRepository.ensureChatExists(chatId);
   }
 
+  /** Чат без создания документа — для проверки триггеров на каждом сообщении */
+  public async peekChat(chatId: number) {
+    return this.chatRepository.getChat(chatId);
+  }
+
   public async updateSettings(chatId: number, updates: Partial<ChatSettings>) {
     const chat = await this.chatRepository.ensureChatExists(chatId);
 
@@ -256,7 +320,62 @@ export class ChatService {
       updates.openAiApiKey = this.cryptoService.encrypt(updates.openAiApiKey);
     }
 
+    if (updates.llmProviders) {
+      updates.llmProviders = this.mergeLlmProviders(chat.settings, updates.llmProviders);
+    }
+
     await this.chatRepository.updateChatSettings(chatId, updates);
+  }
+
+  /**
+   * Дополняет сохранённые настройки провайдеров входящими.
+   * Пустой apiKey = «ключ не трогаем», пустой alias/model = сброс значения.
+   */
+  private mergeLlmProviders(
+    settings: ChatSettings,
+    incoming: Partial<Record<LlmUsageProvider, LlmProviderSettings>>,
+  ): Partial<Record<LlmUsageProvider, LlmProviderSettings>> {
+    const merged: Partial<Record<LlmUsageProvider, LlmProviderSettings>> = {
+      ...(settings.llmProviders ?? {}),
+    };
+
+    for (const [providerId, patch] of Object.entries(incoming)) {
+      const id = providerId as LlmUsageProvider;
+      const next: LlmProviderSettings = { ...(merged[id] ?? {}) };
+
+      if (patch.apiKey !== undefined) {
+        const trimmedKey = patch.apiKey.trim();
+        if (trimmedKey) {
+          next.apiKey = this.cryptoService.encrypt(trimmedKey);
+        }
+      }
+
+      if (patch.model !== undefined) {
+        const trimmedModel = patch.model.trim();
+        if (trimmedModel) {
+          next.model = trimmedModel;
+        } else {
+          delete next.model;
+        }
+      }
+
+      if (patch.alias !== undefined) {
+        const trimmedAlias = patch.alias.trim();
+        if (trimmedAlias) {
+          next.alias = trimmedAlias;
+        } else {
+          delete next.alias;
+        }
+      }
+
+      if (Object.keys(next).length === 0) {
+        delete merged[id];
+      } else {
+        merged[id] = next;
+      }
+    }
+
+    return merged;
   }
 
   async checkUserIsAdmin(chatId: number, userId: number): Promise<boolean> {
@@ -310,19 +429,45 @@ export class ChatService {
     }
   }
 
-  public async getAvailableModels(chatId: number): Promise<Array<string>> {
+  public async getAvailableModels(
+    chatId: number,
+    provider: GPTProvider = 'OpenAi',
+  ): Promise<Array<string>> {
+    const cacheKey = `${chatId}:${provider}`;
+    const now = Date.now();
+
+    const cached = modelsCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.models;
+    }
+
     const chat = await this.chatRepository.getChat(chatId);
 
-    if (!chat || !chat.settings.openAiApiKey) {
+    if (!chat) {
+      return [];
+    }
+
+    const config = this.resolveLlmConfig(chat.settings, provider);
+    if (!config.apiKey || provider === 'Groq') {
       return [];
     }
 
     try {
-      const decryptedKey = this.cryptoService.decrypt(chat.settings.openAiApiKey);
+      const decryptedKey = this.cryptoService.decrypt(config.apiKey);
 
-      return await this.openaiProvider.getAvailableTextModels(decryptedKey);
+      const models = await this.openaiProvider.getAvailableTextModels(decryptedKey, config.call);
+
+      modelsCache.set(cacheKey, { models, expiresAt: now + MODELS_CACHE_TTL_MS });
+      if (modelsCache.size > 500) {
+        modelsCache.clear();
+      }
+
+      return models;
     } catch (error) {
-      logger.error({ err: error, chatId }, 'Ошибка при получении или расшифровке моделей OpenAI');
+      logger.error(
+        { err: error, chatId, provider },
+        'Ошибка при получении или расшифровке моделей провайдера',
+      );
       return [];
     }
   }

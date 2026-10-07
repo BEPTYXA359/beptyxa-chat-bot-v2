@@ -45,22 +45,15 @@ export class GroqProvider {
       stream: true,
     });
 
-    let reported = false;
-
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
       if (content) yield content;
 
-      // Groq присылает usage в x_groq последнего чанка стрима
+      // Groq присылает usage в x_groq последнего чанка стрима; без usage запись не создаём
       const usage = chunk.x_groq?.usage;
       if (onUsage && usage) {
         onUsage(this.toTokenUsage(usage));
-        reported = true;
       }
-    }
-
-    if (onUsage && !reported) {
-      onUsage({ provider: 'Groq', model: config.GROQ_MODEL, promptTokens: 0, completionTokens: 0 });
     }
   }
 

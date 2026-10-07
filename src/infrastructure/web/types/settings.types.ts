@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { MAX_SYSTEM_PROMPT_LENGTH } from '../../../modules/chat/chat.types';
+import {
+  MAX_SYSTEM_PROMPT_LENGTH,
+  LlmProviderSettingsSchema,
+} from '../../../modules/chat/chat.types';
+import { LLM_PROVIDERS } from '../../../modules/llm-usage/llm-usage.types';
 
 export const updateSettingsSchema = z.object({
   isOpenAiEnabled: z.boolean().optional(),
@@ -20,6 +24,7 @@ export const updateSettingsSchema = z.object({
     .optional(),
   openAiModel: z.string().optional(),
   chatterboxChance: z.number().min(0).max(1).optional(),
+  llmProviders: z.partialRecord(z.enum(LLM_PROVIDERS), LlmProviderSettingsSchema).optional(),
 });
 
 export type UpdateSettingsDto = z.infer<typeof updateSettingsSchema>;
