@@ -1,12 +1,16 @@
 import { CurrencyService } from '../currency/currency.service';
+import { describeSteamConversion } from '../conversion/conversion.types';
 import {
   BUNDLE_CACHE_TTL_MS,
+  ConvertedEdition,
   EditionInfo,
   REQUEST_DELAY_MS,
   SteamApiResponseSchema,
   SteamBrowsePurchaseOption,
   SteamBrowseResponseSchema,
+  SteamConversionOptions,
 } from './steam.types';
+import { STEAM_REGION_CURRENCY } from './steam-regions.const';
 import { logger } from '../../shared/logger';
 import { pluralRu } from '../../shared/utils/text.util';
 import { cleanSteamName, stripGameNamePrefix } from './names.util';
@@ -54,7 +58,10 @@ export class SteamService {
     return fetch(url);
   }
 
-  public async getGameInfo(appId: string): Promise<{
+  public async getGameInfo(
+    appId: string,
+    cc: string = 'kz',
+  ): Promise<{
     editions: EditionInfo[];
     subscriptions: EditionInfo[];
     dlcIds: number[];
@@ -64,9 +71,10 @@ export class SteamService {
     releaseDate: string | null;
     isComingSoon: boolean;
     isGameFree: boolean;
+    currency: string;
   }> {
     const response = await this.throttledFetch(
-      `https://store.steampowered.com/api/appdetails?cc=kz&appids=${appId}`,
+      `https://store.steampowered.com/api/appdetails?cc=${cc}&appids=${appId}`,
     );
     const rawData = await response.json();
     const parsedData = SteamApiResponseSchema.parse(rawData);
@@ -78,6 +86,7 @@ export class SteamService {
     }
 
     const gameData = gameInfo.data;
+    const currency = STEAM_REGION_CURRENCY[cc.toLowerCase()] ?? 'KZT';
 
     const editions: EditionInfo[] = [];
     const subscriptions: EditionInfo[] = [];
@@ -85,11 +94,11 @@ export class SteamService {
     if (gameData.is_free) {
       editions.push({
         name: 'Free',
-        originalPriceKzt: null,
-        finalPriceKzt: 0,
+        originalPrice: null,
+        finalPrice: 0,
         discountPercent: null,
-        finalPriceRub: 0,
         isFree: true,
+        currency,
       });
     }
 
@@ -106,23 +115,20 @@ export class SteamService {
 
           if (isFree && gameData.is_free) continue;
 
-          const finalPriceKzt = sub.price_in_cents_with_discount / 100;
-          const { originalPriceKzt, discountPercent } = isFree
-            ? { originalPriceKzt: null, discountPercent: null }
+          const finalPrice = sub.price_in_cents_with_discount / 100;
+          const { originalPrice, discountPercent } = isFree
+            ? { originalPrice: null, discountPercent: null }
             : this.parseSubDiscount(sub);
-          const finalPriceRub = isFree
-            ? 0
-            : this.currencyService.convert(finalPriceKzt, 'KZT', 'RUB');
 
           target.push({
             name: isSubscription
               ? this.formatSubscriptionName(sub.option_text)
               : this.formatEditionName(sub.option_text, gameData.name),
-            originalPriceKzt,
-            finalPriceKzt: isFree ? 0 : finalPriceKzt,
+            originalPrice,
+            finalPrice: isFree ? 0 : finalPrice,
             discountPercent,
-            finalPriceRub,
             isFree,
+            currency,
           });
         }
       }
@@ -140,6 +146,7 @@ export class SteamService {
       releaseDate: gameData.release_date?.date || null,
       isComingSoon: gameData.release_date?.coming_soon || false,
       isGameFree: gameData.is_free,
+      currency,
     };
   }
 
@@ -147,14 +154,16 @@ export class SteamService {
     dlcIds: number[],
     gameName?: string,
     onProgress?: (current: number, total: number) => Promise<void>,
+    cc: string = 'kz',
   ): Promise<EditionInfo[]> {
+    const currency = STEAM_REGION_CURRENCY[cc.toLowerCase()] ?? 'KZT';
     const dlcs: EditionInfo[] = [];
 
     for (const [index, id] of dlcIds.entries()) {
       if (onProgress) await onProgress(index + 1, dlcIds.length);
       try {
         const response = await this.throttledFetch(
-          `https://store.steampowered.com/api/appdetails?cc=kz&appids=${id}`,
+          `https://store.steampowered.com/api/appdetails?cc=${cc}&appids=${id}`,
         );
         const rawData = await response.json();
         const parsed = SteamApiResponseSchema.parse(rawData);
@@ -167,29 +176,28 @@ export class SteamService {
         if (item.is_free) {
           dlcs.push({
             name: gameName ? this.formatEditionName(item.name, gameName) : item.name,
-            originalPriceKzt: null,
-            finalPriceKzt: 0,
+            originalPrice: null,
+            finalPrice: 0,
             discountPercent: null,
-            finalPriceRub: 0,
             isFree: true,
+            currency,
           });
           continue;
         }
 
         if (!item.price_overview) continue;
 
-        const finalPriceKzt = item.price_overview.final / 100;
-        const originalPriceKzt = item.price_overview.initial / 100;
+        const finalPrice = item.price_overview.final / 100;
+        const originalPrice = item.price_overview.initial / 100;
         const discountPercent = item.price_overview.discount_percent;
-        const finalPriceRub = this.currencyService.convert(finalPriceKzt, 'KZT', 'RUB');
 
         dlcs.push({
           name: gameName ? this.formatEditionName(item.name, gameName) : item.name,
-          originalPriceKzt: discountPercent > 0 ? originalPriceKzt : null,
-          finalPriceKzt,
+          originalPrice: discountPercent > 0 ? originalPrice : null,
+          finalPrice,
           discountPercent: discountPercent > 0 ? discountPercent : null,
-          finalPriceRub,
           isFree: false,
+          currency,
         });
       } catch (error) {
         logger.warn({ err: error, dlcId: id }, 'Ошибка при получении DLC');
@@ -199,8 +207,14 @@ export class SteamService {
     return dlcs;
   }
 
-  public async getBundlesInfo(appId: string, gameName?: string): Promise<EditionInfo[]> {
-    const cached = this.bundlesCache.get(appId);
+  public async getBundlesInfo(
+    appId: string,
+    gameName?: string,
+    cc: string = 'kz',
+  ): Promise<EditionInfo[]> {
+    // цены сырые, в валюте региона — ключ кэша должен включать регион
+    const cacheKey = `${appId}:${cc}`;
+    const cached = this.bundlesCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < BUNDLE_CACHE_TTL_MS) {
       return cached.bundles;
     }
@@ -208,7 +222,7 @@ export class SteamService {
     const inputJson = encodeURIComponent(
       JSON.stringify({
         ids: [{ appid: Number(appId) }],
-        context: { country_code: 'KZ', language: 'russian' },
+        context: { country_code: cc.toUpperCase(), language: 'russian' },
         data_request: { include_all_purchase_options: true },
       }),
     );
@@ -223,11 +237,12 @@ export class SteamService {
 
       if (item?.success !== 1) return [];
 
+      const currency = STEAM_REGION_CURRENCY[cc.toLowerCase()] ?? 'KZT';
       const bundles = item.purchase_options
-        .map((option) => this.bundleOptionToEdition(option, gameName))
+        .map((option) => this.bundleOptionToEdition(option, gameName, currency))
         .filter((bundle): bundle is EditionInfo => bundle !== null);
 
-      this.bundlesCache.set(appId, { bundles, fetchedAt: Date.now() });
+      this.bundlesCache.set(cacheKey, { bundles, fetchedAt: Date.now() });
 
       return bundles;
     } catch (error) {
@@ -238,7 +253,8 @@ export class SteamService {
 
   private bundleOptionToEdition(
     option: SteamBrowsePurchaseOption,
-    gameName?: string,
+    gameName: string | undefined,
+    currency: string,
   ): EditionInfo | null {
     if (
       option.bundleid === undefined ||
@@ -248,13 +264,13 @@ export class SteamService {
       return null;
     }
 
-    const finalPriceKzt = option.final_price_in_cents / 100;
-    const isFree = finalPriceKzt === 0;
+    const finalPrice = option.final_price_in_cents / 100;
+    const isFree = finalPrice === 0;
     const discountPercent =
       option.bundle_discount_pct !== undefined && option.bundle_discount_pct > 0
         ? option.bundle_discount_pct
         : null;
-    const originalPriceKzt =
+    const originalPrice =
       discountPercent !== null && option.price_before_bundle_discount !== undefined
         ? option.price_before_bundle_discount / 100
         : null;
@@ -275,17 +291,90 @@ export class SteamService {
 
     return {
       name: `${trimmedName || cleanedBundleName}${itemsSuffix}`,
-      originalPriceKzt,
-      finalPriceKzt,
+      originalPrice,
+      finalPrice,
       discountPercent,
-      finalPriceRub: isFree ? 0 : this.currencyService.convert(finalPriceKzt, 'KZT', 'RUB'),
       isFree,
+      currency,
     };
   }
 
-  public formatGameInline(
+  /**
+   * Конвертирует цены изданий по настройкам чата. Ошибка конвертации
+   * (курсы не загружены, источник не котирует валюту) даёт convertedPrice: null —
+   * форматтеры тогда показывают только цену в валюте региона.
+   * Совпадение валюты региона с целевой — конвертации нет (и доп. процент не применяется).
+   */
+  public convertEditions(
     editions: EditionInfo[],
-    subscriptions: EditionInfo[],
+    options: SteamConversionOptions,
+  ): ConvertedEdition[] {
+    return editions.map((edition) => {
+      const sameCurrency = edition.currency.toUpperCase() === options.targetCurrency.toUpperCase();
+      const convertedPrice = edition.isFree
+        ? 0
+        : sameCurrency
+          ? edition.finalPrice
+          : this.applyExtraPercent(
+              this.convertEditionPrice(edition.finalPrice, edition.currency, options),
+              options.extraPercent,
+            );
+      return {
+        ...edition,
+        convertedPrice,
+        targetCurrency: options.targetCurrency,
+        extraPercent: options.extraPercent,
+      };
+    });
+  }
+
+  private applyExtraPercent(value: number | null, extraPercent: number): number | null {
+    if (value === null || extraPercent <= 0) return value;
+    return value * (1 + extraPercent / 100);
+  }
+
+  private convertEditionPrice(
+    amount: number,
+    fromCurrency: string,
+    options: SteamConversionOptions,
+  ): number | null {
+    const { path, targetCurrency, ratesSource } = options;
+    try {
+      if (path === 'steam') {
+        return this.currencyService.convertPrice(amount, fromCurrency, targetCurrency, 'steam');
+      }
+      if (path === 'converter') {
+        return this.currencyService.convertPrice(amount, fromCurrency, targetCurrency, ratesSource);
+      }
+      // usd_bridge: цена в долларах по паритету Steam, затем эти доллары покупаем
+      // за целевую валюту по курсу конвертера (для Т-Банка — по курсу продажи)
+      const usd = this.currencyService.convertPrice(amount, fromCurrency, 'USD', 'steam');
+      return this.currencyService.convertPrice(usd, 'USD', targetCurrency, ratesSource);
+    } catch (error) {
+      logger.warn(
+        { err: error, fromCurrency, targetCurrency, path },
+        'Не удалось конвертировать цену Steam',
+      );
+      return null;
+    }
+  }
+
+  /** Подпись, каким путём считалась конвертация (для футера сообщений) */
+  public conversionNote(options: SteamConversionOptions): string {
+    const description = describeSteamConversion({
+      path: options.path,
+      ratesSource: options.ratesSource,
+    });
+    const percent =
+      options.extraPercent > 0
+        ? ` + ${options.extraPercent.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%`
+        : '';
+    return `_(цены: ${description}${percent})_`;
+  }
+
+  public formatGameInline(
+    editions: ConvertedEdition[],
+    subscriptions: ConvertedEdition[],
     gameName: string,
     hasRussianLanguage?: boolean,
     releaseDate?: string | null,
@@ -309,13 +398,13 @@ export class SteamService {
       for (const ed of editions) {
         if (ed.isFree) {
           parts.push(`  • ${ed.name} — Бесплатно`);
-        } else if (ed.originalPriceKzt && ed.discountPercent) {
+        } else if (ed.originalPrice && ed.discountPercent) {
           parts.push(
-            `  • ${ed.name} — ${this.formatPrice(ed.finalPriceKzt)}₸ (~${this.formatPrice(ed.finalPriceRub)} ₽) (скидка ${ed.discountPercent}%)`,
+            `  • ${ed.name} — ${this.formatMoney(ed.finalPrice, ed.currency)}${this.formatConvertedSuffix(ed)} (скидка ${ed.discountPercent}%)`,
           );
         } else {
           parts.push(
-            `  • ${ed.name} — ${this.formatPrice(ed.finalPriceKzt)}₸ (~${this.formatPrice(ed.finalPriceRub)} ₽)`,
+            `  • ${ed.name} — ${this.formatMoney(ed.finalPrice, ed.currency)}${this.formatConvertedSuffix(ed)}`,
           );
         }
       }
@@ -326,7 +415,7 @@ export class SteamService {
       parts.push('*Подписка:*');
       for (const sub of subscriptions) {
         parts.push(
-          `  • ${this.formatPrice(sub.finalPriceKzt)}₸ / мес. (~${this.formatPrice(sub.finalPriceRub)} ₽)`,
+          `  • ${this.formatMoney(sub.finalPrice, sub.currency)} / мес.${this.formatConvertedSuffix(sub)}`,
         );
       }
     }
@@ -340,8 +429,8 @@ export class SteamService {
   }
 
   public formatGameMessage(
-    editions: EditionInfo[],
-    subscriptions: EditionInfo[],
+    editions: ConvertedEdition[],
+    subscriptions: ConvertedEdition[],
     headerImage?: string | null,
     gameName?: string,
     hasRussianLanguage?: boolean,
@@ -385,28 +474,48 @@ export class SteamService {
     return parts.join('\n');
   }
 
-  public formatDlcTable(dlcs: EditionInfo[]): string {
+  public formatDlcTable(dlcs: ConvertedEdition[]): string {
     const lines: string[] = [];
     lines.push('');
     lines.push('<h4>DLC</h4>');
 
+    // все цены в одном сообщении в одной валюте региона — колонка конвертации
+    // нужна, только если целевая валюта отличается
+    const hasConversion =
+      dlcs.length > 0 && !this.isSameCurrency(dlcs[0].currency, dlcs[0].targetCurrency);
+
     let rows = '';
-    let totalKzt = 0;
-    let totalRub = 0;
+    let totalOriginal = 0;
+    let totalConverted = 0;
 
     for (const dlc of dlcs) {
       const name = this.escapeHtml(dlc.name);
       if (dlc.isFree) {
         rows += `<tr><td align="left">${name}</td><td align="center" colspan="2">Бесплатно</td></tr>`;
-      } else {
-        totalKzt += dlc.finalPriceKzt;
-        totalRub += dlc.finalPriceRub;
-        rows += `<tr><td align="left">${name}</td><td align="center">${this.formatKztPriceHtml(dlc)}</td><td align="right">${this.formatRubPriceHtml(dlc)}</td></tr>`;
+        continue;
       }
+
+      totalOriginal += dlc.finalPrice;
+      if (dlc.convertedPrice !== null) totalConverted += dlc.convertedPrice;
+
+      if (!hasConversion) {
+        rows += `<tr><td align="left">${name}</td><td align="center" colspan="2">${this.formatRegionPriceHtml(dlc)}</td></tr>`;
+        continue;
+      }
+
+      const convertedCell =
+        dlc.convertedPrice !== null
+          ? `<td align="right">${this.formatConvertedPriceHtml(dlc)}</td>`
+          : '<td></td>';
+      rows += `<tr><td align="left">${name}</td><td align="center">${this.formatRegionPriceHtml(dlc)}</td>${convertedCell}</tr>`;
     }
 
     if (dlcs.length > 1) {
-      rows += `<tr><td align="left"><b>Итого (${dlcs.length} шт.)</b></td><td align="center"><b>${this.formatPrice(totalKzt)}₸</b></td><td align="right"><b>~${this.formatPrice(totalRub)} ₽</b></td></tr>`;
+      const currency = dlcs[0].currency;
+      const totalCell = hasConversion
+        ? `<td align="right"><b>${this.formatConvertedPriceHtml({ ...dlcs[0], convertedPrice: totalConverted })}</b></td>`
+        : '';
+      rows += `<tr><td align="left"><b>Итого (${dlcs.length} шт.)</b></td><td align="center"><b>${this.formatMoney(totalOriginal, currency)}</b></td>${totalCell}</tr>`;
     }
 
     lines.push(
@@ -415,7 +524,7 @@ export class SteamService {
     return lines.join('\n');
   }
 
-  public formatBundlesTable(bundles: EditionInfo[]): string {
+  public formatBundlesTable(bundles: ConvertedEdition[]): string {
     const lines: string[] = [];
     lines.push('');
     lines.push('<h4>Бандлы</h4>');
@@ -426,7 +535,7 @@ export class SteamService {
         if (bundle.isFree) {
           return `<tr><td align="left">${name}</td><td align="center" colspan="2">Бесплатно</td></tr>`;
         }
-        return `<tr><td align="left">${name}</td><td align="center">${this.formatKztPriceHtml(bundle)}</td><td align="right">${this.formatRubPriceHtml(bundle)}</td></tr>`;
+        return `<tr><td align="left">${name}</td><td align="center">${this.formatRegionPriceHtml(bundle)}</td><td align="right">${this.formatConvertedPriceHtml(bundle)}</td></tr>`;
       })
       .join('');
 
@@ -436,31 +545,60 @@ export class SteamService {
     return lines.join('\n');
   }
 
-  private formatTable(items: EditionInfo[], firstColumn: string = 'Название'): string {
+  private formatTable(items: ConvertedEdition[], firstColumn: string = 'Название'): string {
     const rows = items.map((item) => {
       const name = this.escapeHtml(item.name);
       if (item.isFree) {
         return `<tr><td align="left">${name}</td><td align="center" colspan="2">Бесплатно</td></tr>`;
       }
-      const kztPrice = this.formatKztPriceHtml(item);
-      const rubPrice = this.formatRubPriceHtml(item);
-      return `<tr><td align="left">${name}</td><td align="center">${kztPrice}</td><td align="right">${rubPrice}</td></tr>`;
+      const regionPrice = this.formatRegionPriceHtml(item);
+      const convertedPrice = this.formatConvertedPriceHtml(item);
+      if (convertedPrice === null) {
+        return `<tr><td align="left">${name}</td><td align="center" colspan="2">${regionPrice}</td></tr>`;
+      }
+      return `<tr><td align="left">${name}</td><td align="center">${regionPrice}</td><td align="right">${convertedPrice}</td></tr>`;
     });
     return `<table bordered striped><tr><th align="center">${firstColumn}</th><th align="center" colspan="2">Цена</th></tr>${rows.join('')}</table>`;
   }
 
-  private formatKztPriceHtml(item: EditionInfo): string {
+  /** Цена в валюте региона, со скидкой при наличии */
+  private formatRegionPriceHtml(item: ConvertedEdition): string {
     if (item.isFree) return 'Бесплатно';
-    const finalFormatted = this.formatPrice(item.finalPriceKzt);
-    if (item.originalPriceKzt !== null && item.originalPriceKzt > item.finalPriceKzt) {
-      const originalFormatted = this.formatPrice(item.originalPriceKzt);
-      return `<s>${originalFormatted}₸</s> ${finalFormatted}₸`;
+    const finalFormatted = this.formatMoney(item.finalPrice, item.currency);
+    if (item.originalPrice !== null && item.originalPrice > item.finalPrice) {
+      const originalFormatted = this.formatMoney(item.originalPrice, item.currency);
+      return `<s>${originalFormatted}</s> ${finalFormatted}`;
     }
-    return `${finalFormatted}₸`;
+    return finalFormatted;
   }
 
-  private formatRubPriceHtml(item: EditionInfo): string {
-    return `~${this.formatPrice(item.finalPriceRub)} ₽`;
+  /** Конвертированная цена; null — колонка не показывается (нет курса или валюты совпадают) */
+  private formatConvertedPriceHtml(item: ConvertedEdition): string | null {
+    if (this.isSameCurrency(item.currency, item.targetCurrency)) return null;
+    if (item.convertedPrice === null) return null;
+    return `~${this.formatMoney(item.convertedPrice, item.targetCurrency)}`;
+  }
+
+  private formatConvertedSuffix(item: ConvertedEdition): string {
+    const converted = this.formatConvertedPriceHtml(item);
+    return converted === null ? '' : ` (${converted})`;
+  }
+
+  private isSameCurrency(a: string, b: string): boolean {
+    return a.toUpperCase() === b.toUpperCase();
+  }
+
+  private formatMoney(amount: number, currency: string): string {
+    try {
+      return new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency,
+        currencyDisplay: 'narrowSymbol',
+        maximumFractionDigits: 0,
+      }).format(amount);
+    } catch {
+      return `${this.formatPrice(amount)} ${currency}`;
+    }
   }
 
   private formatPrice(price: number): string {
@@ -475,32 +613,32 @@ export class SteamService {
     price_in_cents?: number;
     percent_savings?: number;
     price_in_cents_with_discount: number;
-  }): { originalPriceKzt: number | null; discountPercent: number | null } {
+  }): { originalPrice: number | null; discountPercent: number | null } {
     if (sub.percent_savings !== undefined && sub.percent_savings > 0) {
-      const originalPriceKzt = sub.price_in_cents ? sub.price_in_cents / 100 : null;
-      return { originalPriceKzt, discountPercent: sub.percent_savings };
+      const originalPrice = sub.price_in_cents ? sub.price_in_cents / 100 : null;
+      return { originalPrice, discountPercent: sub.percent_savings };
     }
 
     if (sub.price_in_cents !== undefined && sub.price_in_cents > sub.price_in_cents_with_discount) {
-      const originalPriceKzt = sub.price_in_cents / 100;
+      const originalPrice = sub.price_in_cents / 100;
       const discountPercent = Math.round(
         (1 - sub.price_in_cents_with_discount / sub.price_in_cents) * 100,
       );
-      return { originalPriceKzt, discountPercent };
+      return { originalPrice, discountPercent };
     }
 
     if (sub.option_text.includes('discount_original_price')) {
-      const originalKzt = this.extractOriginalPriceFromHtml(sub.option_text);
-      if (originalKzt !== null && originalKzt > 0) {
-        const finalKzt = sub.price_in_cents_with_discount / 100;
-        const discountPercent = Math.round((1 - finalKzt / originalKzt) * 100);
+      const originalPrice = this.extractOriginalPriceFromHtml(sub.option_text);
+      if (originalPrice !== null && originalPrice > 0) {
+        const finalPrice = sub.price_in_cents_with_discount / 100;
+        const discountPercent = Math.round((1 - finalPrice / originalPrice) * 100);
         if (discountPercent > 0) {
-          return { originalPriceKzt: originalKzt, discountPercent };
+          return { originalPrice, discountPercent };
         }
       }
     }
 
-    return { originalPriceKzt: null, discountPercent: null };
+    return { originalPrice: null, discountPercent: null };
   }
 
   private extractOriginalPriceFromHtml(htmlText: string): number | null {
@@ -514,7 +652,8 @@ export class SteamService {
 
   private formatEditionName(rawName: string, gameName: string): string {
     let name = rawName.replace(/<[^>]*>/g, '');
-    name = name.replace(/\s*-\s*[\d\s]+₸(?:\s*[\d\s]+₸)?\s*$/, '');
+    // хвост вида "- 1 299₸" из option_text: валюта зависит от региона
+    name = name.replace(/\s*-\s*[\d\s.,]+[₸₽$€£¥₴₺₹₩](?:\s*[\d\s.,]+[₸₽$€£¥₴₺₹₩])?\s*$/, '');
     return stripGameNamePrefix(name, gameName) || 'Базовая игра';
   }
 
@@ -532,12 +671,16 @@ export class SteamService {
     return match ? match[1].trim() : 'мес.';
   }
 
-  private formatSubscriptionTable(subscriptions: EditionInfo[]): string {
+  private formatSubscriptionTable(subscriptions: ConvertedEdition[]): string {
     const rows = subscriptions.map((item) => {
       const name = this.escapeHtml(item.name);
       const period = this.extractPeriod(item.name);
-      const rubPrice = this.formatPrice(item.finalPriceRub);
-      return `<tr><td align="center">${name}</td><td align="center">~${rubPrice} ₽ / ${period}</td></tr>`;
+      const converted = this.formatConvertedPriceHtml(item);
+      const price =
+        converted !== null
+          ? `${converted} / ${period}`
+          : `${this.formatMoney(item.finalPrice, item.currency)} / ${period}`;
+      return `<tr><td align="center">${name}</td><td align="center">${price}</td></tr>`;
     });
     return [
       '',

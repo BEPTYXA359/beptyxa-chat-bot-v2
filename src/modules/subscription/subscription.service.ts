@@ -12,6 +12,7 @@ import {
 import { TelegramUser } from '../../shared/types/telegram.types';
 import { BotContext } from '../../bot/bot.types';
 import { CurrencyService } from '../currency/currency.service';
+import { ConversionSettingsService } from '../conversion/conversion-settings.service';
 import { logger } from '../../shared/logger';
 import {
   addPeriod,
@@ -56,6 +57,7 @@ export class SubscriptionService {
     private readonly agenda: Agenda,
     private readonly bot: Bot<BotContext>,
     private readonly currencyService: CurrencyService,
+    private readonly conversionSettingsService: ConversionSettingsService,
   ) {
     this.defineJobs();
   }
@@ -91,7 +93,7 @@ export class SubscriptionService {
     creator: TelegramUser,
     dto: CreateSubscriptionDto,
   ): Promise<SubscriptionDocument> {
-    this.assertCurrencySupported(dto.currency);
+    await this.assertCurrencySupported(chatId, dto.currency);
 
     return this.repository.create({
       chatId,
@@ -119,7 +121,7 @@ export class SubscriptionService {
   ): Promise<void> {
     await this.findOwnedSubscription(subscriptionId, chatId);
 
-    this.assertCurrencySupported(dto.currency);
+    await this.assertCurrencySupported(chatId, dto.currency);
 
     await this.repository.update(subscriptionId, {
       name: dto.name,
@@ -150,7 +152,7 @@ export class SubscriptionService {
     chatId: number,
     baseCurrency: string,
   ): Promise<SubscriptionSettingsDocument> {
-    this.assertCurrencySupported(baseCurrency);
+    await this.assertCurrencySupported(chatId, baseCurrency);
     return this.settingsRepository.upsertBaseCurrency(chatId, baseCurrency);
   }
 
@@ -228,7 +230,11 @@ export class SubscriptionService {
   ): Promise<void> {
     const priceParts = [this.formatMoney(subscription.cost, subscription.currency)];
     if (subscription.currency !== 'RUB') {
-      const approx = this.approximateRub(subscription.cost, subscription.currency);
+      const approx = await this.approximateRub(
+        subscription.chatId,
+        subscription.cost,
+        subscription.currency,
+      );
       if (approx) priceParts.push(approx);
     }
     const price = priceParts.join(' ≈ ');
@@ -268,20 +274,27 @@ export class SubscriptionService {
     return subscription;
   }
 
-  private assertCurrencySupported(currency: string): void {
-    if (!this.currencyService.getRates()) {
+  private async assertCurrencySupported(chatId: number, currency: string): Promise<void> {
+    const source = await this.conversionSettingsService.resolveRatesSource(chatId);
+    if (!this.currencyService.getRates(source)) {
       throw new CurrencyRatesUnavailableError();
     }
     try {
-      this.currencyService.convert(1, currency, 'RUB');
+      this.currencyService.convertPrice(1, currency, 'RUB', source);
     } catch {
       throw new InvalidSubscriptionCurrencyError(currency);
     }
   }
 
-  private approximateRub(amount: number, currency: string): string | null {
+  /** Примерная сумма в рублях по источнику курсов чата */
+  private async approximateRub(
+    chatId: number,
+    amount: number,
+    currency: string,
+  ): Promise<string | null> {
     try {
-      const rub = this.currencyService.convert(amount, currency, 'RUB');
+      const source = await this.conversionSettingsService.resolveRatesSource(chatId);
+      const rub = this.currencyService.convertPrice(amount, currency, 'RUB', source);
       return this.formatMoney(rub, 'RUB');
     } catch {
       return null;

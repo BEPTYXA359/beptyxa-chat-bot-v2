@@ -4,6 +4,7 @@ import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { ReminderService } from '../reminder/reminder.service';
 import { SteamService } from './steam.service';
+import type { SteamConversionOptions } from './steam.types';
 
 const STEAM_LINK_REGEX = /store\.steampowered\.com\/app\/(\d+)/i;
 const STEAM_DLC_REGEX = /^steam_dlc:(\d+)$/;
@@ -11,6 +12,36 @@ const STEAM_REMINDER_REGEX = /^steam_reminder:(\d+)$/;
 
 type GameInfo = Awaited<ReturnType<SteamService['getGameInfo']>>;
 type KeyboardRow = InlineKeyboardMarkup['inline_keyboard'][number];
+
+interface SteamConversionContext {
+  cc: string;
+  options: SteamConversionOptions;
+}
+
+/** Настройки конвертации чата: регион игры, целевая валюта и путь конвертации */
+const getConversionContext = async (ctx: BotContext): Promise<SteamConversionContext> => {
+  const chatId = ctx.chat?.id ?? ctx.from?.id ?? 0;
+  const settings = await ctx.services.conversion.getSettings(chatId);
+  return {
+    cc: settings.steam.region,
+    options: {
+      path: settings.steam.path,
+      targetCurrency: settings.steam.targetCurrency,
+      ratesSource: settings.steam.ratesSource,
+      extraPercent: settings.steam.extraPercent,
+    },
+  };
+};
+
+/** Футер с путём конвертации — только если конвертировать вообще есть во что */
+const conversionNote = (
+  steam: SteamService,
+  regionCurrency: string,
+  options: SteamConversionOptions,
+): string =>
+  regionCurrency.toUpperCase() === options.targetCurrency.toUpperCase()
+    ? ''
+    : '\n\n' + steam.conversionNote(options);
 
 const rowHasCallbackData = (row: KeyboardRow, callbackData: string): boolean =>
   row.some((button) => 'callback_data' in button && button.callback_data === callbackData);
@@ -44,22 +75,28 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
     try {
       await ctx.replyWithChatAction('typing');
 
-      const info = await ctx.services.steam.getGameInfo(appId);
-      const bundles = await ctx.services.steam.getBundlesInfo(appId, info.gameName);
+      const { cc, options } = await getConversionContext(ctx);
+      const steam = ctx.services.steam;
+
+      const info = await steam.getGameInfo(appId, cc);
+      const bundles = await steam.getBundlesInfo(appId, info.gameName, cc);
 
       const bundlesSection =
-        bundles.length > 0 ? ctx.services.steam.formatBundlesTable(bundles) : '';
+        bundles.length > 0 ? steam.formatBundlesTable(steam.convertEditions(bundles, options)) : '';
+      const note = conversionNote(steam, info.currency, options);
       const message =
-        ctx.services.steam.formatGameMessage(
-          info.editions,
-          info.subscriptions,
+        steam.formatGameMessage(
+          steam.convertEditions(info.editions, options),
+          steam.convertEditions(info.subscriptions, options),
           info.headerImage,
           info.gameName,
           info.hasRussianLanguage,
           info.releaseDate,
           info.isComingSoon,
           info.isGameFree,
-        ) + bundlesSection;
+        ) +
+        bundlesSection +
+        note;
 
       if (!message.trim()) {
         await ctx.reply('Информация о ценах не найдена.', {
@@ -103,12 +140,15 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
       ];
       await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: progressKeyboard } });
 
-      const info = await ctx.services.steam.getGameInfo(appId);
+      const { cc, options } = await getConversionContext(ctx);
+      const steam = ctx.services.steam;
+
+      const info = await steam.getGameInfo(appId, cc);
 
       const formatMainMessage = () =>
-        ctx.services.steam.formatGameMessage(
-          info.editions,
-          info.subscriptions,
+        steam.formatGameMessage(
+          steam.convertEditions(info.editions, options),
+          steam.convertEditions(info.subscriptions, options),
           info.headerImage,
           info.gameName,
           info.hasRussianLanguage,
@@ -118,13 +158,14 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
         );
 
       // бандлы показываются в карточке сразу — при пересборке держим секцию перед DLC
-      const bundles = await ctx.services.steam.getBundlesInfo(appId, info.gameName);
+      const bundles = await steam.getBundlesInfo(appId, info.gameName, cc);
       const bundlesSection =
-        bundles.length > 0 ? ctx.services.steam.formatBundlesTable(bundles) : '';
+        bundles.length > 0 ? steam.formatBundlesTable(steam.convertEditions(bundles, options)) : '';
+      const note = conversionNote(steam, info.currency, options);
 
       if (info.dlcIds.length === 0) {
         await ctx.editMessageText(
-          { markdown: formatMainMessage() + bundlesSection },
+          { markdown: formatMainMessage() + bundlesSection + note },
           {
             reply_markup: buildGameKeyboard(ctx.services.steam, appId, info, {
               includeDlc: false,
@@ -134,7 +175,7 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
         return;
       }
 
-      const dlcs = await ctx.services.steam.getDlcInfo(
+      const dlcs = await steam.getDlcInfo(
         info.dlcIds,
         info.gameName,
         async (current, total) => {
@@ -152,10 +193,14 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
             },
           });
         },
+        cc,
       );
 
       const fullMessage =
-        formatMainMessage() + bundlesSection + ctx.services.steam.formatDlcTable(dlcs);
+        formatMainMessage() +
+        bundlesSection +
+        steam.formatDlcTable(steam.convertEditions(dlcs, options)) +
+        note;
 
       await ctx.editMessageText(
         { markdown: fullMessage },

@@ -12,6 +12,7 @@ import {
   wallClockInstant,
 } from '../../shared/utils/timezone.util';
 import { SteamService } from '../steam/steam.service';
+import { ConversionSettingsService } from '../conversion/conversion-settings.service';
 
 type Schedulable = Pick<ReminderDocument, 'frequency' | 'time' | 'specificDays' | 'timezone'>;
 type SteamGameInfo = Awaited<ReturnType<SteamService['getGameInfo']>>;
@@ -36,6 +37,7 @@ export class ReminderService {
     private readonly agenda: Agenda,
     private readonly bot: Bot<BotContext>,
     private readonly steamService: SteamService,
+    private readonly conversionSettingsService: ConversionSettingsService,
   ) {
     this.defineJobs();
     this.defineSteamJobs();
@@ -137,7 +139,8 @@ export class ReminderService {
 
     let info: SteamGameInfo | null = null;
     try {
-      info = await this.steamService.getGameInfo(appId);
+      const settings = await this.conversionSettingsService.getSettings(chatId);
+      info = await this.steamService.getGameInfo(appId, settings.steam.region);
     } catch (error) {
       logger.warn(
         { err: error, appId, reminderId },
@@ -214,7 +217,8 @@ export class ReminderService {
       try {
         if (this.isScheduledToday(reminder.time)) continue;
 
-        const info = await this.steamService.getGameInfo(appId);
+        const settings = await this.conversionSettingsService.getSettings(reminder.chatId);
+        const info = await this.steamService.getGameInfo(appId, settings.steam.region);
 
         if (!info.isComingSoon) {
           await this.sendRichWithFallback(
@@ -353,16 +357,29 @@ export class ReminderService {
   }
 
   private async sendSteamGameInfo(chatId: number, info: SteamGameInfo): Promise<void> {
-    const message = this.steamService.formatGameMessage(
-      info.editions,
-      info.subscriptions,
-      info.headerImage,
-      info.gameName,
-      info.hasRussianLanguage,
-      info.releaseDate,
-      info.isComingSoon,
-      info.isGameFree,
-    );
+    const settings = await this.conversionSettingsService.getSettings(chatId);
+    const options = {
+      path: settings.steam.path,
+      targetCurrency: settings.steam.targetCurrency,
+      ratesSource: settings.steam.ratesSource,
+      extraPercent: settings.steam.extraPercent,
+    };
+    // подпись пути — только когда есть что конвертировать
+    const note =
+      info.currency.toUpperCase() === settings.steam.targetCurrency.toUpperCase()
+        ? ''
+        : '\n\n' + this.steamService.conversionNote(options);
+    const message =
+      this.steamService.formatGameMessage(
+        this.steamService.convertEditions(info.editions, options),
+        this.steamService.convertEditions(info.subscriptions, options),
+        info.headerImage,
+        info.gameName,
+        info.hasRussianLanguage,
+        info.releaseDate,
+        info.isComingSoon,
+        info.isGameFree,
+      ) + note;
     if (!message.trim()) return;
     await this.sendRichWithFallback(chatId, message);
   }

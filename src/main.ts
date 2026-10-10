@@ -33,6 +33,9 @@ import { SubscriptionSettingsRepository } from './modules/subscription/subscript
 import { SubscriptionService } from './modules/subscription/subscription.service';
 import { setupSubscriptionCallbacks } from './modules/subscription/subscription.command';
 
+import { ConversionSettingsRepository } from './modules/conversion/conversion-settings.repository';
+import { ConversionSettingsService } from './modules/conversion/conversion-settings.service';
+
 import { LlmUsageRepository } from './modules/llm-usage/llm-usage.repository';
 import { LlmUsageService } from './modules/llm-usage/llm-usage.service';
 
@@ -59,6 +62,10 @@ async function bootstrap() {
 
     const steamService = new SteamService(currencyService);
 
+    const conversionSettingsRepository = new ConversionSettingsRepository(db);
+    await conversionSettingsRepository.ensureIndexes();
+    const conversionSettingsService = new ConversionSettingsService(conversionSettingsRepository);
+
     const llmUsageRepository = new LlmUsageRepository(db);
     await llmUsageRepository.ensureIndexes();
     const llmUsageService = new LlmUsageService(llmUsageRepository);
@@ -76,7 +83,13 @@ async function bootstrap() {
 
     const reminderRepository = new ReminderRepository(db);
     await reminderRepository.ensureIndexes();
-    const reminderService = new ReminderService(reminderRepository, agenda, bot, steamService);
+    const reminderService = new ReminderService(
+      reminderRepository,
+      agenda,
+      bot,
+      steamService,
+      conversionSettingsService,
+    );
 
     const carPlateRepository = new CarPlateRepository(db);
     await carPlateRepository.ensureIndexes();
@@ -86,12 +99,14 @@ async function bootstrap() {
     const subscriptionSettingsRepository = new SubscriptionSettingsRepository(db);
     await subscriptionRepository.ensureIndexes();
     await subscriptionSettingsRepository.ensureIndexes();
+
     const subscriptionService = new SubscriptionService(
       subscriptionRepository,
       subscriptionSettingsRepository,
       agenda,
       bot,
       currencyService,
+      conversionSettingsService,
     );
 
     await agenda.start();
@@ -106,6 +121,7 @@ async function bootstrap() {
         currency: currencyService,
         steam: steamService,
         chat: chatService,
+        conversion: conversionSettingsService,
       };
       await next();
     });
@@ -136,6 +152,7 @@ async function bootstrap() {
       carPlateService,
       subscriptionService,
       currencyService,
+      conversionSettingsService,
       llmUsageService,
     );
     await webServer.init();

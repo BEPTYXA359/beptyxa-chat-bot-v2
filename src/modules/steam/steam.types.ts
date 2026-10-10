@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { ConverterSource } from '../currency/currency.types';
+import type { SteamConversionPath } from '../conversion/conversion.types';
 
 const SteamSubSchema = z.object({
   option_text: z.string(),
@@ -75,11 +77,27 @@ export type SteamGameDetails = z.infer<typeof SteamGameDetailsSchema>;
 export const REQUEST_DELAY_MS = 1000;
 export const BUNDLE_CACHE_TTL_MS = 10 * 60 * 1000;
 
+/** Цена в валюте региона без конвертации (то, что кладём в кэш бандлов) */
 export interface EditionInfo {
   name: string;
-  originalPriceKzt: number | null;
-  finalPriceKzt: number;
+  originalPrice: number | null;
+  finalPrice: number;
   discountPercent: number | null;
-  finalPriceRub: number;
   isFree: boolean;
+  currency: string;
+}
+
+/** Цена, дополненная конвертацией по настройкам чата */
+export interface ConvertedEdition extends EditionInfo {
+  convertedPrice: number | null;
+  targetCurrency: string;
+  /** Доп. процент (комиссия), уже применённый к convertedPrice */
+  extraPercent: number;
+}
+
+export interface SteamConversionOptions {
+  path: SteamConversionPath;
+  targetCurrency: string;
+  ratesSource: ConverterSource;
+  extraPercent: number;
 }

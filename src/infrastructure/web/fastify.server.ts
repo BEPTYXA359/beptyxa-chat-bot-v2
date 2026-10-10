@@ -13,6 +13,8 @@ import { subscriptionRoutes } from './routes/subscription.routes';
 import { SubscriptionService } from '../../modules/subscription/subscription.service';
 import { currencyRoutes } from './routes/currency.routes';
 import { CurrencyService } from '../../modules/currency/currency.service';
+import { conversionSettingsRoutes } from './routes/conversion-settings.routes';
+import { ConversionSettingsService } from '../../modules/conversion/conversion-settings.service';
 import { llmUsageRoutes } from './routes/llm-usage.routes';
 import { LlmUsageService } from '../../modules/llm-usage/llm-usage.service';
 
@@ -23,6 +25,7 @@ export class WebServer {
   private readonly carPlateService: CarPlateService;
   private readonly subscriptionService: SubscriptionService;
   private readonly currencyService: CurrencyService;
+  private readonly conversionSettingsService: ConversionSettingsService;
   private readonly llmUsageService: LlmUsageService;
 
   constructor(
@@ -31,6 +34,7 @@ export class WebServer {
     carPlateService: CarPlateService,
     subscriptionService: SubscriptionService,
     currencyService: CurrencyService,
+    conversionSettingsService: ConversionSettingsService,
     llmUsageService: LlmUsageService,
   ) {
     this.chatService = chatService;
@@ -38,6 +42,7 @@ export class WebServer {
     this.carPlateService = carPlateService;
     this.subscriptionService = subscriptionService;
     this.currencyService = currencyService;
+    this.conversionSettingsService = conversionSettingsService;
     this.llmUsageService = llmUsageService;
     this.app = Fastify({
       logger: true,
@@ -85,6 +90,12 @@ export class WebServer {
       protectedInstance.register(currencyRoutes, {
         prefix: '/api/currency',
         currencyService: this.currencyService,
+        conversionSettingsService: this.conversionSettingsService,
+      });
+
+      protectedInstance.register(conversionSettingsRoutes, {
+        prefix: '/api/conversion-settings',
+        conversionSettingsService: this.conversionSettingsService,
       });
 
       protectedInstance.register(llmUsageRoutes, {

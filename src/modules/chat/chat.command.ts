@@ -62,9 +62,32 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
         );
       }
 
-      let result: number;
+      const { amount, from, to } = parsedData;
+
+      let message: string;
       try {
-        result = ctx.services.currency.convert(parsedData.amount, parsedData.from, parsedData.to);
+        const source = await ctx.services.conversion.resolveRatesSource(ctx.chat.id);
+        const sellResult = ctx.services.currency.convert(amount, from, to, source);
+        const buyResult =
+          source === 'tbank'
+            ? ctx.services.currency.convertPrice(amount, from, to, source)
+            : sellResult;
+
+        const line = (value: number, label?: string) => {
+          const rounded = Number(value.toFixed(2));
+          const suffix = label ? ` (${label})` : '';
+          return `*${amount} ${from}* это примерно *${rounded} ${to}*${suffix}`;
+        };
+
+        if (buyResult !== sellResult) {
+          const target = to === 'RUB' || from !== 'RUB' ? from : to;
+          message = [
+            line(sellResult, `продажа ${target}`),
+            line(buyResult, `покупка ${target}`),
+          ].join('\n');
+        } else {
+          message = line(sellResult);
+        }
       } catch (convertError) {
         if (convertError instanceof Error) {
           logger.warn({ err: convertError }, 'Ошибка внутри CurrencyService');
@@ -74,10 +97,6 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
           return ctx.reply('Произошла непредвиденная ошибка при конвертации.');
         }
       }
-
-      const roundedResult = Number(result.toFixed(2));
-
-      const message = `*${parsedData.amount} ${parsedData.from}* это примерно *${roundedResult} ${parsedData.to}*`;
 
       await ctx.reply(message, {
         parse_mode: 'Markdown',

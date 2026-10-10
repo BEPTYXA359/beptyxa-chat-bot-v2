@@ -63,18 +63,27 @@ function currencyArticle(
   amount: number,
   from: string,
   to: string,
-  result: number,
+  sellResult: number,
+  buyResult?: number,
 ): InlineQueryResultArticle {
-  const roundedResult = Number(result.toFixed(2));
-  const title = `💱 ${amount} ${from} = ${roundedResult} ${to}`;
+  const roundedSell = Number(sellResult.toFixed(2));
+  const title = `💱 ${amount} ${from} = ${roundedSell} ${to}`;
+  const showBoth = buyResult !== undefined && buyResult !== sellResult;
+
+  const line = (value: number, label: string) =>
+    `*${amount} ${from}* это примерно *${Number(value.toFixed(2))} ${to}* (${label})`;
 
   return {
     type: 'article',
     id: `currency_${Date.now()}`,
     title,
-    description: 'Конвертация валют',
+    description: showBoth
+      ? `продажа: ${roundedSell} · покупка: ${Number(buyResult.toFixed(2))}`
+      : 'Конвертация валют',
     input_message_content: {
-      message_text: `*${amount} ${from}* это примерно *${roundedResult} ${to}*`,
+      message_text: showBoth
+        ? `${line(sellResult, `продажа ${from}`)}\n${line(buyResult, `покупка ${from}`)}`
+        : `*${amount} ${from}* это примерно *${roundedSell} ${to}*`,
       parse_mode: 'Markdown',
     },
   };
@@ -132,7 +141,7 @@ function steamArticle(
   appId: string,
 ): InlineQueryResultArticle {
   const lines = formattedMessage.split('\n').filter((l) => l.trim());
-  const firstPriceLine = lines.find((l) => l.includes('₸') || l.includes('₽')) || '';
+  const firstPriceLine = lines.find((l) => /[₸₽$€£¥₴₺₹₩]/.test(l) && !l.startsWith('*')) || '';
 
   return {
     type: 'article',
@@ -186,7 +195,7 @@ export const setupInlineCommands = (bot: Bot<BotContext>, router: QueryRouterSer
           break;
         case 'steam_info':
           articles = routerResult.steamAppId
-            ? await handleSteam(routerResult.steamAppId, services)
+            ? await handleSteam(routerResult.steamAppId, services, userId)
             : [helpArticle()];
           break;
         case 'ai_chat':
@@ -232,8 +241,12 @@ async function handleCurrency(
       to = parsed.to;
     }
 
-    const result = services.currency.convert(amount, from, to);
-    return [currencyArticle(amount, from, to, result)];
+    const source = await services.conversion.resolveRatesSource(userId);
+    // продажа: клиент отдаёт from; покупка: клиент покупает from
+    const sellResult = services.currency.convert(amount, from, to, source);
+    const buyResult =
+      source === 'tbank' ? services.currency.convertPrice(amount, from, to, source) : undefined;
+    return [currencyArticle(amount, from, to, sellResult, buyResult)];
   } catch (error) {
     logger.warn({ err: error, query }, 'inline: ошибка конвертации');
     return [currencyErrorArticle()];
@@ -257,18 +270,33 @@ async function handleAiChat(
 async function handleSteam(
   appId: string,
   services: BotContext['services'],
+  userId: number,
 ): Promise<InlineQueryResultArticle[]> {
   try {
-    const gameInfo = await services.steam.getGameInfo(appId);
-    const msg = services.steam.formatGameInline(
-      gameInfo.editions,
-      gameInfo.subscriptions,
-      gameInfo.gameName,
-      gameInfo.hasRussianLanguage,
-      gameInfo.releaseDate,
-      gameInfo.isComingSoon,
-      gameInfo.isGameFree,
-    );
+    const settings = await services.conversion.getSettings(userId);
+    const cc = settings.steam.region;
+    const conversionOptions = {
+      path: settings.steam.path,
+      targetCurrency: settings.steam.targetCurrency,
+      ratesSource: settings.steam.ratesSource,
+      extraPercent: settings.steam.extraPercent,
+    };
+
+    const gameInfo = await services.steam.getGameInfo(appId, cc);
+    const note =
+      gameInfo.currency.toUpperCase() === settings.steam.targetCurrency.toUpperCase()
+        ? ''
+        : '\n\n' + services.steam.conversionNote(conversionOptions);
+    const msg =
+      services.steam.formatGameInline(
+        services.steam.convertEditions(gameInfo.editions, conversionOptions),
+        services.steam.convertEditions(gameInfo.subscriptions, conversionOptions),
+        gameInfo.gameName,
+        gameInfo.hasRussianLanguage,
+        gameInfo.releaseDate,
+        gameInfo.isComingSoon,
+        gameInfo.isGameFree,
+      ) + note;
 
     return [steamArticle(gameInfo.gameName, msg, appId)];
   } catch (error) {
