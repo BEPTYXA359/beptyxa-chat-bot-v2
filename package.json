@@ -7,6 +7,9 @@
   "author": "BEPTYXA359",
   "type": "commonjs",
   "main": "index.js",
+  "workspaces": [
+    "cloudflare/llm-proxy"
+  ],
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc",

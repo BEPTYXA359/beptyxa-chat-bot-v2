@@ -19,13 +19,15 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+          GROQ_BASE_URL: ${{ secrets.GROQ_BASE_URL }}
+          GROQ_PROXY_TOKEN: ${{ secrets.GROQ_PROXY_TOKEN }}
           APP_URL: ${{ secrets.APP_URL }}
           APP_SHORTNAME: ${{ secrets.APP_SHORTNAME }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY,GROQ_API_KEY,GROQ_MODEL,APP_URL,APP_SHORTNAME
+          envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY,GROQ_API_KEY,GROQ_MODEL,GROQ_BASE_URL,GROQ_PROXY_TOKEN,APP_URL,APP_SHORTNAME
           script: |
             cd /projects/beptyxa-chat-bot-v2
             
@@ -39,6 +41,8 @@ jobs:
             echo "NODE_ENV=production" >> .env
             echo "GROQ_API_KEY=$GROQ_API_KEY" >> .env
             echo "GROQ_MODEL=$GROQ_MODEL" >> .env
+            if [ -n "$GROQ_BASE_URL" ]; then echo "GROQ_BASE_URL=$GROQ_BASE_URL" >> .env; fi
+            if [ -n "$GROQ_PROXY_TOKEN" ]; then echo "GROQ_PROXY_TOKEN=$GROQ_PROXY_TOKEN" >> .env; fi
             echo "APP_URL=$APP_URL" >> .env
             
             docker-compose up -d --build

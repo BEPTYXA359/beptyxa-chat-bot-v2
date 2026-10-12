@@ -1,0 +1,42 @@
+name: Deploy llm-proxy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare/llm-proxy/**'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # workspaces: зависимости воркера ставятся из корня (см. package.json)
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck --workspace cloudflare/llm-proxy
+
+      - name: Deploy Worker
+        working-directory: cloudflare/llm-proxy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      - name: Sync PROXY_TOKEN secret
+        working-directory: cloudflare/llm-proxy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          PROXY_TOKEN: ${{ secrets.PROXY_TOKEN }}
+        run: echo "$PROXY_TOKEN" | npx wrangler secret put PROXY_TOKEN

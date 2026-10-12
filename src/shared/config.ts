@@ -12,6 +12,8 @@ const configSchema = z.object({
   ENCRYPTION_KEY: z.string().length(32),
   GROQ_API_KEY: z.string().min(1),
   GROQ_MODEL: z.string().min(1),
+  GROQ_BASE_URL: z.url().optional(),
+  GROQ_PROXY_TOKEN: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3000),
   APP_URL: z.url(),
   APP_SHORTNAME: z.string().default('app'),

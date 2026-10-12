@@ -11,7 +11,14 @@ export class GroqProvider {
   private readonly client: Groq;
 
   constructor() {
-    this.client = new Groq({ apiKey: config.GROQ_API_KEY });
+    this.client = new Groq({
+      apiKey: config.GROQ_API_KEY,
+      // Groq блокирует IP датацентров на edge до аутентификации — ходим через CF Worker-прокси
+      ...(config.GROQ_BASE_URL ? { baseURL: config.GROQ_BASE_URL } : {}),
+      ...(config.GROQ_BASE_URL && config.GROQ_PROXY_TOKEN
+        ? { defaultHeaders: { 'X-Proxy-Token': config.GROQ_PROXY_TOKEN } }
+        : {}),
+    });
   }
 
   public async generateText(

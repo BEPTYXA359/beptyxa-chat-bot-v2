@@ -1,0 +1,7 @@
+name = "llm-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# Наблюдаемость: логи запросов видны в дашборде (Workers & Pages → llm-proxy → Logs)
+[observability]
+enabled = true
