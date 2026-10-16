@@ -4,7 +4,10 @@ import { ChatService } from '../../../modules/chat/chat.service';
 import { logger } from '../../../shared/logger';
 import { z } from 'zod';
 import { getTargetChatId } from '../utils/request.util';
-import { CHAT_LLM_PROVIDERS } from '../../../infrastructure/llm/llm-providers.registry';
+import {
+  CHAT_LLM_PROVIDERS,
+  getProviderDef,
+} from '../../../infrastructure/llm/llm-providers.registry';
 import { GPTProvider } from '../../../modules/chat/chat.types';
 
 export interface SettingsRoutesOptions {
@@ -43,10 +46,22 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
         return reply.status(404).send({ error: 'Чат не найден' });
       }
 
-      // Ключи не отдаём наружу — только факт наличия, модель и алиас
-      const providers: Record<string, { hasApiKey: boolean; model?: string; alias?: string }> = {};
+      // Ключи не отдаём наружу — только факт наличия, модель, алиас и опции провайдера
+      const providers: Record<
+        string,
+        {
+          hasApiKey: boolean;
+          model?: string;
+          alias?: string;
+          endpointVariant?: string;
+          endpointVariants?: Array<{ id: string; label: string }>;
+          supportsWebSearch: boolean;
+          webSearch: boolean;
+        }
+      > = {};
       for (const provider of SETTINGS_PROVIDERS) {
         const stored = chat.settings.llmProviders?.[provider];
+        const def = getProviderDef(provider);
         providers[provider] = {
           hasApiKey:
             provider === 'Groq'
@@ -54,8 +69,12 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
               : provider === 'OpenAi'
                 ? !!(stored?.apiKey || chat.settings.openAiApiKey)
                 : !!stored?.apiKey,
-          model: stored?.model,
+          model: provider === 'OpenAi' ? stored?.model || chat.settings.openAiModel : stored?.model,
           alias: stored?.alias,
+          endpointVariant: stored?.endpointVariant,
+          endpointVariants: def.endpointVariants?.map(({ id, label }) => ({ id, label })),
+          supportsWebSearch: !!def.supportsWebSearch,
+          webSearch: stored?.webSearch ?? false,
         };
       }
 
@@ -79,14 +98,14 @@ export const settingsRoutes: FastifyPluginAsync<SettingsRoutesOptions> = async (
       });
 
       return reply.send({
-        isOpenAiEnabled: chat.settings.isOpenAiEnabled,
         isChatterboxEnabled: chat.settings.isChatterboxEnabled,
         isStreamingEnabled: chat.settings.isStreamingEnabled,
-        hasOpenAiApiKey: providers.OpenAi.hasApiKey,
         llmSystemPrompt: chat.settings.llmSystemPrompt,
         chatterboxSystemPrompt: chat.settings.chatterboxSystemPrompt,
         openAiModel: providers.OpenAi.model || chat.settings.openAiModel,
         chatterboxChance: chat.settings.chatterboxChance,
+        chatterboxTrigger: chat.settings.chatterboxTrigger ?? '',
+        chatterboxProvider: chat.settings.chatterboxProvider,
         providers,
         availableModels: openAiModels,
         providerModels,

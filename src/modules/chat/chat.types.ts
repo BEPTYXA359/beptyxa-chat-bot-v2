@@ -18,11 +18,12 @@ export const LlmProviderSettingsSchema = z.object({
   apiKey: z.string().max(512).optional(),
   model: z.string().max(128).optional(),
   alias: z.string().max(MAX_LLM_ALIAS_LENGTH).optional(),
+  endpointVariant: z.string().max(MAX_LLM_ALIAS_LENGTH).optional(),
+  webSearch: z.boolean().optional(),
 });
 export type LlmProviderSettings = z.infer<typeof LlmProviderSettingsSchema>;
 
 export const ChatSettingsSchema = z.object({
-  isOpenAiEnabled: z.boolean().default(true),
   isChatterboxEnabled: z.boolean().default(false),
   isStreamingEnabled: z.boolean().default(false),
   openAiApiKey: z.string().optional(),
@@ -30,6 +31,8 @@ export const ChatSettingsSchema = z.object({
   chatterboxSystemPrompt: z.string().max(MAX_SYSTEM_PROMPT_LENGTH).optional(),
   openAiModel: z.string().default('gpt-4o-mini'),
   chatterboxChance: z.number().min(0).max(1).default(0.02),
+  chatterboxTrigger: z.string().max(MAX_LLM_ALIAS_LENGTH).optional(),
+  chatterboxProvider: z.union([z.enum(LLM_PROVIDERS), z.literal('')]).optional(),
   llmProviders: z.partialRecord(z.enum(LLM_PROVIDERS), LlmProviderSettingsSchema).optional(),
 });
 export type ChatSettings = z.infer<typeof ChatSettingsSchema>;

@@ -16,7 +16,6 @@ export class ChatRepository {
 
   public async ensureChatExists(chatId: number): Promise<ChatDocument> {
     const defaultSettings: ChatSettings = {
-      isOpenAiEnabled: true,
       isChatterboxEnabled: false,
       isStreamingEnabled: false,
       llmSystemPrompt: 'Ты полезный ассистент.',

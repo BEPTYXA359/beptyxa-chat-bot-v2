@@ -15,7 +15,7 @@ import { CryptoService } from '../../shared/services/crypto.service';
 import { logger } from '../../shared/logger';
 import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 import { LlmUsageService } from '../llm-usage/llm-usage.service';
-import { LlmUsageProvider, LlmUsageSource } from '../llm-usage/llm-usage.types';
+import { LlmUsageProvider, LlmUsageSource, LLM_PROVIDERS } from '../llm-usage/llm-usage.types';
 import { getProviderDef } from '../../infrastructure/llm/llm-providers.registry';
 
 interface TelegramChatMemberResponse {
@@ -45,6 +45,9 @@ interface ResolvedLlmConfig {
   model: string;
   call: LlmCallOptions;
 }
+
+const isKnownLlmProvider = (value: string | undefined): value is LlmUsageProvider =>
+  LLM_PROVIDERS.some((id) => id === value);
 
 export class ChatService {
   constructor(
@@ -81,10 +84,18 @@ export class ChatService {
         ? stored?.model || settings.openAiModel || def.defaultModel
         : stored?.model || def.defaultModel;
 
+    // Вариант эндпоинта (например, GLM: баланс / кодинг план); неизвестный id — дефолт
+    const endpointVariant = def.endpointVariants?.find((v) => v.id === stored?.endpointVariant);
+
     return {
       apiKey,
       model,
-      call: { provider, baseUrl: def.baseUrl, includeUsage: def.supportsStreamOptions },
+      call: {
+        provider,
+        baseUrl: endpointVariant?.baseUrl ?? def.baseUrl,
+        includeUsage: def.supportsStreamOptions,
+        extraBody: stored?.webSearch ? def.webSearchBody : undefined,
+      },
     };
   }
 
@@ -112,10 +123,6 @@ export class ChatService {
   ): Promise<string> {
     const chat = await this.chatRepository.ensureChatExists(chatId);
     const def = getProviderDef(provider);
-
-    if (provider === 'OpenAi' && !chat.settings.isOpenAiEnabled) {
-      return 'Функция ChatGPT отключена в настройках этого чата.';
-    }
 
     const config = this.resolveLlmConfig(chat.settings, provider);
 
@@ -231,29 +238,47 @@ export class ChatService {
     await this.chatRepository.addGptMessage(chatId, 'assistant', fullText);
   }
 
-  public async triggerChatterboxReply(chatId: number, text: string): Promise<string | null> {
+  /**
+   * Ответ Балабола на сообщение. options.explain — для принудительного вызова:
+   * вместо молчаливого null возвращаем текст с причиной (выключен, нет ключа…).
+   */
+  public async triggerChatterboxReply(
+    chatId: number,
+    text: string,
+    options: { explain?: boolean } = {},
+  ): Promise<string | null> {
     const chat = await this.chatRepository.getChat(chatId);
 
     if (!chat || !chat.settings.isChatterboxEnabled) {
-      return null;
+      return options.explain
+        ? 'Балабол отключён в настройках этого чата (/app → Настройки).'
+        : null;
     }
 
-    const config = this.resolveLlmConfig(chat.settings, 'OpenAi');
-    if (!config.apiKey) return null;
+    const provider = isKnownLlmProvider(chat.settings.chatterboxProvider)
+      ? chat.settings.chatterboxProvider
+      : 'Groq';
+    const config = this.resolveLlmConfig(chat.settings, provider);
+    const displayName = getProviderDef(provider).displayName;
 
-    if (chat.chatterboxMessages.length === 0) return null;
-
-    const decryptedKey = this.cryptoService.decrypt(config.apiKey);
+    if (!config.apiKey) {
+      return options.explain
+        ? `У Балабола не настроен API ключ ${displayName}! Добавьте его через Mini App.`
+        : null;
+    }
 
     const messagesForLlm: Omit<ChatMessage, 'timestamp'>[] = chat.chatterboxMessages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
-    messagesForLlm.push({
-      role: 'user',
-      content: text,
-    });
+    if (text) {
+      messagesForLlm.push({ role: 'user', content: text });
+    } else if (messagesForLlm.length === 0) {
+      return options.explain
+        ? 'Пока не о чем говорить — истории для Балабола в чате ещё нет.'
+        : null;
+    }
 
     messagesForLlm.unshift({
       role: 'system',
@@ -263,19 +288,26 @@ export class ChatService {
     });
 
     try {
-      const reply = await this.openaiProvider.generateText(
-        messagesForLlm,
-        decryptedKey,
-        config.model,
-        this.usageRecorder(chatId, 'chatterbox'),
-        config.call,
-      );
+      const usageRecorder = this.usageRecorder(chatId, 'chatterbox');
+
+      const reply =
+        provider === 'Groq'
+          ? await this.groqProvider.generateText(messagesForLlm, usageRecorder)
+          : await this.openaiProvider.generateText(
+              messagesForLlm,
+              this.cryptoService.decrypt(config.apiKey),
+              config.model,
+              usageRecorder,
+              config.call,
+            );
 
       await this.chatRepository.addChatterboxMessage(chatId, 'assistant', reply);
       return reply;
     } catch (error) {
-      logger.error({ err: error }, 'Произошла ошибка при использовании chatterbox');
-      return null;
+      logger.error({ err: error, provider }, 'Произошла ошибка при использовании chatterbox');
+      return options.explain
+        ? `Произошла ошибка при обращении к ${displayName}. Попробуйте позже.`
+        : null;
     }
   }
 
@@ -368,6 +400,19 @@ export class ChatService {
         }
       }
 
+      if (patch.endpointVariant !== undefined) {
+        const trimmedVariant = patch.endpointVariant.trim();
+        if (trimmedVariant) {
+          next.endpointVariant = trimmedVariant;
+        } else {
+          delete next.endpointVariant;
+        }
+      }
+
+      if (typeof patch.webSearch === 'boolean') {
+        next.webSearch = patch.webSearch;
+      }
+
       if (Object.keys(next).length === 0) {
         delete merged[id];
       } else {
@@ -433,18 +478,20 @@ export class ChatService {
     chatId: number,
     provider: GPTProvider = 'OpenAi',
   ): Promise<Array<string>> {
-    const cacheKey = `${chatId}:${provider}`;
+    const chat = await this.chatRepository.getChat(chatId);
+
+    if (!chat) {
+      return [];
+    }
+
+    const storedVariant = chat.settings.llmProviders?.[provider]?.endpointVariant?.trim();
+    // Вариант эндпоинта в ключе — после переключения не отдаём старый список моделей
+    const cacheKey = `${chatId}:${provider}:${storedVariant ?? ''}`;
     const now = Date.now();
 
     const cached = modelsCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
       return cached.models;
-    }
-
-    const chat = await this.chatRepository.getChat(chatId);
-
-    if (!chat) {
-      return [];
     }
 
     const config = this.resolveLlmConfig(chat.settings, provider);

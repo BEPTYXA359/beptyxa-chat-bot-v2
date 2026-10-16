@@ -1,5 +1,12 @@
 import type { LlmUsageProvider } from '../../modules/llm-usage/llm-usage.types';
 
+/** Вариант эндпоинта провайдера (например, GLM: обычный баланс или кодинг план) */
+export interface ProviderEndpointVariant {
+  id: string;
+  label: string;
+  baseUrl: string;
+}
+
 /**
  * Все провайдеры для AI-чата, кроме Groq, работают через OpenAI-совместимый API
  * (один SDK, отличается только baseUrl, набор моделей и список ключевых слов).
@@ -9,6 +16,8 @@ export interface ChatLlmProviderDef {
   displayName: string;
   /** OpenAI-совместимый baseUrl; для OpenAi не задан (официальный эндпоинт) */
   baseUrl?: string;
+  /** Варианты baseUrl, между которыми можно переключаться в настройках */
+  endpointVariants?: ProviderEndpointVariant[];
   defaultModel: string;
   /** Слова-триггеры в начале сообщения; нижний регистр */
   keywords: string[];
@@ -17,6 +26,10 @@ export interface ChatLlmProviderDef {
   excludeKeywords: string[];
   /** Передавать ли stream_options.include_usage в стриме */
   supportsStreamOptions: boolean;
+  /** Есть ли у провайдера встроенный веб-поиск, включаемый тумблером в настройках */
+  supportsWebSearch?: boolean;
+  /** Дополнительные поля тела запроса при включённом поиске (формат у каждого свой) */
+  webSearchBody?: Record<string, unknown>;
 }
 
 export const CHAT_LLM_PROVIDERS: ChatLlmProviderDef[] = [
@@ -42,11 +55,33 @@ export const CHAT_LLM_PROVIDERS: ChatLlmProviderDef[] = [
     id: 'Glm',
     displayName: 'GLM',
     baseUrl: 'https://api.z.ai/api/paas/v4',
+    endpointVariants: [
+      {
+        id: 'default',
+        label: 'Баланс (pay-as-you-go)',
+        baseUrl: 'https://api.z.ai/api/paas/v4',
+      },
+      {
+        id: 'coding',
+        label: 'Кодинг план',
+        baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+      },
+    ],
     defaultModel: 'glm-4.7',
     keywords: ['глм', 'glm'],
     textModelRegex: /^(glm-)/i,
     excludeKeywords: ['image', 'video', 'embedding', 'audio', 'cogview', 'cogvideo', 'vision'],
     supportsStreamOptions: false,
+    supportsWebSearch: true,
+    // Без search_engine тул молча игнорируется — проверено живыми вызовами 2026-10-16
+    webSearchBody: {
+      tools: [
+        {
+          type: 'web_search',
+          web_search: { enable: true, search_engine: 'search-prime', search_result: true },
+        },
+      ],
+    },
   },
   {
     id: 'DeepSeek',
@@ -106,6 +141,8 @@ export const CHAT_LLM_PROVIDERS: ChatLlmProviderDef[] = [
     textModelRegex: /.*/i,
     excludeKeywords: [],
     supportsStreamOptions: true,
+    supportsWebSearch: true,
+    webSearchBody: { plugins: [{ id: 'web' }] },
   },
 ];
 

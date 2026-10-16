@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ChatSettings, GPTProvider } from './chat.types';
-import { detectLlmTrigger, getProviderTriggers } from './llm-triggers.util';
+import { detectLlmTrigger, getProviderTriggers, matchChatterboxTrigger } from './llm-triggers.util';
 
 const settingsWith = (llmProviders: ChatSettings['llmProviders']): ChatSettings =>
   ({
-    isOpenAiEnabled: true,
     isChatterboxEnabled: false,
     isStreamingEnabled: false,
     openAiModel: 'gpt-4o-mini',
@@ -78,6 +77,13 @@ describe('detectLlmTrigger', () => {
     expect(detectLlmTrigger('чатгпт ')).toBeNull();
   });
 
+  it('промпт может быть многострочным', () => {
+    expect(detectLlmTrigger('грок строка1\nстрока2')).toEqual({
+      provider: 'Groq',
+      prompt: 'строка1\nстрока2',
+    });
+  });
+
   it('не срабатывает на обычных сообщениях', () => {
     expect(detectLlmTrigger('привет, как дела?')).toBeNull();
     expect(detectLlmTrigger('гптшник ты')).toBeNull();
@@ -100,5 +106,44 @@ describe('detectLlmTrigger', () => {
       providers.add(trigger!.provider);
     }
     expect(providers.size).toBe(8);
+  });
+});
+
+describe('matchChatterboxTrigger', () => {
+  it('распознаёт дефолтное слово «балабол»', () => {
+    expect(matchChatterboxTrigger('балабол расскажи анекдот', 'балабол')).toEqual({
+      prompt: 'расскажи анекдот',
+    });
+  });
+
+  it('голый триггер без текста валиден — пустой промпт', () => {
+    expect(matchChatterboxTrigger('балабол', 'балабол')).toEqual({ prompt: '' });
+    expect(matchChatterboxTrigger('  Балабол   ', 'балабол')).toEqual({ prompt: '' });
+  });
+
+  it('регистр и лишние пробелы не важны', () => {
+    expect(matchChatterboxTrigger('  БалаБол  что новенького? ', 'балабол')).toEqual({
+      prompt: 'что новенького?',
+    });
+  });
+
+  it('призыв может быть многострочным', () => {
+    expect(matchChatterboxTrigger('балабол строка1\nстрока2', 'балабол')).toEqual({
+      prompt: 'строка1\nстрока2',
+    });
+  });
+
+  it('работает со своим словом из настроек', () => {
+    expect(matchChatterboxTrigger('болтун привет', '  Болтун ')).toEqual({ prompt: 'привет' });
+    expect(matchChatterboxTrigger('балабол привет', 'болтун')).toBeNull();
+  });
+
+  it('триггер должен быть отдельным словом', () => {
+    expect(matchChatterboxTrigger('балабольник работает', 'балабол')).toBeNull();
+    expect(matchChatterboxTrigger('привет балабол', 'балабол')).toBeNull();
+  });
+
+  it('пустое слово не матчится', () => {
+    expect(matchChatterboxTrigger('балабол', '   ')).toBeNull();
   });
 });

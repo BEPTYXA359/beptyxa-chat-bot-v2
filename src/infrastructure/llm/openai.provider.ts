@@ -17,6 +17,8 @@ export interface LlmCallOptions {
   baseUrl?: string;
   /** Передавать stream_options.include_usage (не все провайдеры это поддерживают) */
   includeUsage?: boolean;
+  /** Нестандартные поля тела запроса (веб-поиск GLM/OpenRouter и т.п.) */
+  extraBody?: Record<string, unknown>;
 }
 
 export class OpenAiProvider {
@@ -33,7 +35,8 @@ export class OpenAiProvider {
       const response = await client.chat.completions.create({
         model,
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      });
+        ...(call.extraBody ?? {}),
+      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
 
       if (onUsage) {
         onUsage({
@@ -65,7 +68,8 @@ export class OpenAiProvider {
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
       ...(call.includeUsage ? { stream_options: { include_usage: true as const } } : {}),
-    });
+      ...(call.extraBody ?? {}),
+    } as OpenAI.Chat.ChatCompletionCreateParamsStreaming);
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;

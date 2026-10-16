@@ -9,7 +9,10 @@ import {
   getProviderDef,
   CHAT_TRIGGER_PROVIDERS,
 } from '../../infrastructure/llm/llm-providers.registry';
-import { detectLlmTrigger } from './llm-triggers.util';
+import { detectLlmTrigger, matchChatterboxTrigger } from './llm-triggers.util';
+import { ChatDocument } from './chat.types';
+
+const CHATTERBOX_DEFAULT_TRIGGER = 'балабол';
 
 export const setupChatCommands = (bot: Bot<BotContext>) => {
   bot.on('message:text', async (ctx, next) => {
@@ -24,10 +27,32 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
       return;
     }
 
-    const settings = await ctx.services.chat.recordChatterboxHistory(chatId, text, chat);
+    const settings = chat?.settings;
 
-    if (settings && settings.isChatterboxEnabled) {
-      const chance = settings.chatterboxChance ?? 0.02;
+    if (settings?.isChatterboxEnabled) {
+      // Принудительный вызов: «балабол <фраза>» или своё слово из настроек
+      const forced = matchChatterboxTrigger(
+        text,
+        settings.chatterboxTrigger?.trim() || CHATTERBOX_DEFAULT_TRIGGER,
+      );
+      if (forced) {
+        await answerChatterbox(ctx, forced.prompt, chat, true);
+        return;
+      }
+
+      // Реплай на сообщение бота — Балабол вступает в разговор (без молчаливых
+      // сбоев); команды и «конвертер …» оставляем штатным обработчикам
+      const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+      if (isReplyToBot && !text.startsWith('/') && !/^конвертер\s+/i.test(text)) {
+        await answerChatterbox(ctx, text, chat, true);
+        return;
+      }
+    }
+
+    const recorded = await ctx.services.chat.recordChatterboxHistory(chatId, text, chat);
+
+    if (recorded && recorded.isChatterboxEnabled) {
+      const chance = recorded.chatterboxChance ?? 0.02;
 
       if (Math.random() < chance) {
         try {
@@ -117,6 +142,7 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
 
 💬 *AI-чат*
 ${buildAiChatHelp()}
+  — \`балабол <фраза>\` — призвать Балабола; реплай на сообщение бота тоже работает
   — свои слова-триггеры: /app → Настройки
 
 🎮 *Цены в Steam*
@@ -191,6 +217,36 @@ ${buildAiChatHelp()}
       });
     }
   });
+};
+
+/** Ответ Балабола на принудительный вызов или реплай; текст вызова пишется в историю */
+const answerChatterbox = async (
+  ctx: BotContext,
+  prompt: string,
+  chat: ChatDocument | null,
+  explain: boolean,
+): Promise<void> => {
+  if (!ctx.chat || !ctx.msg) return;
+
+  const chatId = ctx.chat.id;
+
+  try {
+    if (prompt) {
+      await ctx.services.chat.recordChatterboxHistory(chatId, prompt, chat);
+    }
+
+    await ctx.replyWithChatAction('typing');
+
+    const reply = await ctx.services.chat.triggerChatterboxReply(chatId, prompt, { explain });
+
+    if (reply) {
+      await ctx.reply(reply, {
+        reply_parameters: { message_id: ctx.msg.message_id },
+      });
+    }
+  } catch (error) {
+    logger.error({ err: error }, 'Ошибка chatterbox');
+  }
 };
 
 const makeLlmAnswer = async (ctx: BotContext, provider: GPTProvider, prompt: string) => {
