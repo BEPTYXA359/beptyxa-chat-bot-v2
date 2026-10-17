@@ -23,6 +23,8 @@
     "@agendajs/mongo-backend": "^4.0.2",
     "@fastify/cors": "^11.2.0",
     "@grammyjs/auto-retry": "^2.0.2",
+    "@grammyjs/ratelimiter": "^1.2.1",
+    "@grammyjs/runner": "^2.0.3",
     "@grammyjs/stream": "^1.1.0",
     "agenda": "^6.2.5",
     "dotenv": "^17.3.1",

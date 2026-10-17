@@ -1,5 +1,6 @@
 import { Agenda } from 'agenda';
 import { MongoBackend } from '@agendajs/mongo-backend';
+import { run } from '@grammyjs/runner';
 
 import { createBot } from './bot/bot';
 import { logger } from './shared/logger';
@@ -140,11 +141,12 @@ async function bootstrap() {
       );
     });
 
-    bot.start({
-      onStart: (botInfo) => {
-        logger.info(`Бот @${botInfo.username} успешно запущен!`);
-      },
-    });
+    await bot.init();
+    logger.info(`Бот @${bot.botInfo.username} успешно запущен!`);
+
+    // Параллельная обработка апдейтов: долгие LLM-стримы и запросы к Steam
+    // не задерживают апдейты других пользователей
+    const runner = run(bot, { sink: { concurrency: 10 } });
 
     const webServer = new WebServer(
       chatService,
@@ -164,10 +166,16 @@ async function bootstrap() {
 
     const stopApp = async () => {
       logger.info('Останавливаем бота...');
+      await runner.stop();
+      // stop() не ждёт уже запущенные апдейты — дожидаемся их сами, но не
+      // дольше потолка, чтобы ручной Ctrl+C не вис на длинном LLM-стриме
+      const drainDeadline = Date.now() + 30_000;
+      while (runner.size() > 0 && Date.now() < drainDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
       await agenda.stop();
-      await database.close();
-      await bot.stop();
       await webServer.stop();
+      await database.close();
       currencyService.destroy();
 
       process.exit(0);

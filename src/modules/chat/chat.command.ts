@@ -56,7 +56,7 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
 
       if (Math.random() < chance) {
         try {
-          await ctx.replyWithChatAction('typing');
+          ctx.startTyping();
 
           const reply = await ctx.services.chat.triggerChatterboxReply(chatId, text);
 
@@ -77,7 +77,7 @@ export const setupChatCommands = (bot: Bot<BotContext>) => {
     const query = ctx.match[1];
 
     try {
-      await ctx.replyWithChatAction('typing');
+      ctx.startTyping();
 
       const parsedData = await ctx.services.chat.parseCurrency(query, ctx.chat.id);
 
@@ -235,7 +235,7 @@ const answerChatterbox = async (
       await ctx.services.chat.recordChatterboxHistory(chatId, prompt, chat);
     }
 
-    await ctx.replyWithChatAction('typing');
+    ctx.startTyping();
 
     const reply = await ctx.services.chat.triggerChatterboxReply(chatId, prompt, { explain });
 
@@ -256,7 +256,7 @@ const makeLlmAnswer = async (ctx: BotContext, provider: GPTProvider, prompt: str
   const displayName = getProviderDef(provider).displayName;
 
   try {
-    await ctx.replyWithChatAction('typing');
+    ctx.startTyping();
 
     const chatInfo = await ctx.services.chat.getChatInfo(chatId);
     const isPrivate = ctx.chat.type === 'private';

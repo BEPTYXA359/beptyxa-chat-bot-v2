@@ -6,6 +6,7 @@ import { ChatService } from '../modules/chat/chat.service';
 import { ConversionSettingsService } from '../modules/conversion/conversion-settings.service';
 
 export interface BotContext extends StreamFlavor<Context> {
+  startTyping: () => void;
   services: {
     currency: CurrencyService;
     steam: SteamService;

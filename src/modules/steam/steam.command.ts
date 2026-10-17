@@ -1,5 +1,5 @@
 import { Bot } from 'grammy';
-import type { InlineKeyboardMarkup } from '@grammyjs/types';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 import { BotContext } from '../../bot/bot.types';
 import { logger } from '../../shared/logger';
 import { ReminderService } from '../reminder/reminder.service';
@@ -73,7 +73,7 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
     if (!appId) return;
 
     try {
-      await ctx.replyWithChatAction('typing');
+      ctx.startTyping();
 
       const { cc, options } = await getConversionContext(ctx);
       const steam = ctx.services.steam;
