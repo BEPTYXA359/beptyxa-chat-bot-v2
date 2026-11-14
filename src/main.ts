@@ -71,6 +71,7 @@ async function bootstrap() {
     await llmUsageRepository.ensureIndexes();
     const llmUsageService = new LlmUsageService(llmUsageRepository);
 
+    const bot = createBot();
     const chatRepository = new ChatRepository(db);
     const chatService = new ChatService(
       chatRepository,
@@ -78,9 +79,8 @@ async function bootstrap() {
       groqProvider,
       cryptoService,
       llmUsageService,
+      bot,
     );
-
-    const bot = createBot();
 
     const reminderRepository = new ReminderRepository(db);
     await reminderRepository.ensureIndexes();
@@ -116,6 +116,7 @@ async function bootstrap() {
     await reminderService.catchUpMissed();
     await subscriptionService.scheduleSubscriptionCheckJob();
     await subscriptionService.repairSubscriptions();
+    await subscriptionService.checkSubscriptions();
 
     bot.use(async (ctx, next) => {
       ctx.services = {

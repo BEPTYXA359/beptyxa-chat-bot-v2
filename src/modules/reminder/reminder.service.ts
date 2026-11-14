@@ -1,18 +1,21 @@
-import { Agenda, Job } from 'agenda';
+import { Agenda, BackoffContext, Job } from 'agenda';
 import { ReminderRepository } from './reminder.repository';
 import { CreateReminderDto, ReminderDocument, SteamSubscriber } from './reminder.types';
 import { logger } from '../../shared/logger';
 import { Bot, GrammyError } from 'grammy';
 import { BotContext } from '../../bot/bot.types';
 import { TelegramUser } from '../../shared/types/telegram.types';
-import {
-  getTzOffsetMs,
-  getTzParts,
-  MSK_TIMEZONE,
-  wallClockInstant,
-} from '../../shared/utils/timezone.util';
+import { getTzParts, MSK_TIMEZONE, wallClockInstant } from '../../shared/utils/timezone.util';
 import { SteamService } from '../steam/steam.service';
 import { ConversionSettingsService } from '../conversion/conversion-settings.service';
+import { ObjectId } from 'mongodb';
+
+export class ReminderNotFoundError extends Error {
+  constructor() {
+    super('Напоминание не найдено');
+    this.name = 'ReminderNotFoundError';
+  }
+}
 
 type Schedulable = Pick<ReminderDocument, 'frequency' | 'time' | 'specificDays' | 'timezone'>;
 type SteamGameInfo = Awaited<ReturnType<SteamService['getGameInfo']>>;
@@ -25,6 +28,18 @@ const STEAM_RELEASE_HOUR = 12;
 // Steam часто разблокирует игры позже полуночи; если в день выхода игра ещё
 // не доступна в полдень, повторяем проверку вечером того же дня
 const STEAM_RELEASE_RETRY_HOUR = 20;
+
+function deliveryBackoff({ error, attempt }: BackoffContext): number | null {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'error_code' in error &&
+    [400, 403].includes(Number(error.error_code))
+  ) {
+    return null;
+  }
+  return attempt <= 3 ? 60_000 * 2 ** (attempt - 1) : null;
+}
 
 export class ReminderService {
   private readonly JOB_NAME = 'send_telegram_reminder';
@@ -57,12 +72,15 @@ export class ReminderService {
           logger.warn({ reminderId }, 'Напоминание не найдено в БД, пропускаем');
           return;
         }
+        if (reminder.frequency === 'every_other_day' && !this.isEveryOtherDayDue(reminder)) {
+          return;
+        }
 
         try {
           await this.sendReminder(reminder, chatId);
         } catch (error) {
           logger.error({ err: error, chatId, reminderId }, 'Ошибка при отправке напоминания');
-          return;
+          throw error;
         }
 
         try {
@@ -83,7 +101,7 @@ export class ReminderService {
           }
         }
       },
-      { lockLifetime: 60_000 },
+      { lockLifetime: 60_000, backoff: deliveryBackoff },
     );
   }
 
@@ -110,9 +128,10 @@ export class ReminderService {
             { err: error, chatId, reminderId, appId },
             'Ошибка при обработке напоминания о выходе игры',
           );
+          throw error;
         }
       },
-      { lockLifetime: 60_000 },
+      { lockLifetime: 60_000, backoff: deliveryBackoff },
     );
 
     this.agenda.define(
@@ -546,9 +565,7 @@ export class ReminderService {
       job.schedule(runAt);
     } else if (doc.frequency === 'every_other_day') {
       const { hours, minutes } = this.resolveClockTime(doc.time, timezone);
-      const runAt = this.nextOccurrence(hours, minutes, timezone);
-      job.startDate(runAt);
-      job.repeatEvery('2 days');
+      job.repeatEvery(`${minutes} ${hours} * * *`, { timezone });
     } else {
       const { hours, minutes } = this.resolveClockTime(doc.time, timezone);
       let cronExpression = `${minutes} ${hours} * * *`;
@@ -586,16 +603,16 @@ export class ReminderService {
     return this.instantToClockTime(instant, timezone);
   }
 
-  private nextOccurrence(hours: number, minutes: number, timezone: string): Date {
-    const now = new Date();
-    const offsetMs = getTzOffsetMs(now, timezone);
-    const parts = getTzParts(now, timezone);
+  private isEveryOtherDayDue(reminder: ReminderDocument): boolean {
+    const timezone = reminder.timezone ?? 'UTC';
+    const daysSinceCreation =
+      this.localDayNumber(new Date(), timezone) - this.localDayNumber(reminder.createdAt, timezone);
+    return daysSinceCreation >= 0 && daysSinceCreation % 2 === 0;
+  }
 
-    let candidateMs = Date.UTC(parts.y, parts.m - 1, parts.d, hours, minutes, 0, 0) - offsetMs;
-    if (candidateMs <= now.getTime()) {
-      candidateMs += 86_400_000;
-    }
-    return new Date(candidateMs);
+  private localDayNumber(instant: Date, timezone: string): number {
+    const parts = getTzParts(instant, timezone);
+    return Math.floor(Date.UTC(parts.y, parts.m - 1, parts.d) / 86_400_000);
   }
 
   private instantToClockTime(
@@ -647,15 +664,19 @@ export class ReminderService {
     }
   }
 
+  private async findOwnedReminder(reminderId: string, chatId: number): Promise<ReminderDocument> {
+    if (!ObjectId.isValid(reminderId)) throw new ReminderNotFoundError();
+    const reminder = await this.repository.getById(reminderId);
+    if (!reminder || reminder.chatId !== chatId) throw new ReminderNotFoundError();
+    return reminder;
+  }
+
   public async updateReminder(
     reminderId: string,
     chatId: number,
     dto: CreateReminderDto,
   ): Promise<void> {
-    const oldReminder = await this.repository.getById(reminderId);
-    if (!oldReminder) {
-      throw new Error('Напоминания не существует');
-    }
+    const oldReminder = await this.findOwnedReminder(reminderId, chatId);
 
     if (oldReminder.kind === 'steam_release') {
       throw new Error('Напоминания о выходе игры нельзя редактировать');
@@ -683,20 +704,17 @@ export class ReminderService {
       throw new Error('Не удалось перепланировать расписание напоминания');
     }
 
-    await this.repository.update(reminderId, updatedFields);
+    await this.repository.update(reminderId, updatedFields, chatId);
   }
 
   public async getActiveReminders(chatId: number): Promise<ReminderDocument[]> {
     return this.repository.getActiveByChat(chatId);
   }
 
-  public async deleteReminder(reminderId: string): Promise<void> {
-    const reminder = await this.repository.getById(reminderId);
-    if (!reminder) return;
-
+  public async deleteReminder(reminderId: string, chatId: number): Promise<void> {
+    await this.findOwnedReminder(reminderId, chatId);
     await this.cancelJob(reminderId);
-
-    await this.repository.delete(reminderId);
+    await this.repository.delete(reminderId, chatId);
   }
 
   public async reconcileJobs(): Promise<void> {
@@ -716,7 +734,8 @@ export class ReminderService {
       const needsRepair =
         !existing ||
         existing.name !== this.getJobNameForReminder(reminder) ||
-        existing.nextRunAt === null;
+        existing.nextRunAt === null ||
+        (reminder.frequency === 'every_other_day' && existing.repeatInterval === '2 days');
 
       if (!needsRepair) continue;
 
@@ -814,22 +833,12 @@ export class ReminderService {
   private computeLastExpectedOccurrence(reminder: ReminderDocument): Date | null {
     const timezone = reminder.timezone ?? 'UTC';
     const now = new Date();
-
-    if (reminder.frequency === 'every_other_day') {
-      const intervalMs = 2 * 86_400_000;
-      const anchor = (reminder.lastFiredAt ?? reminder.createdAt).getTime();
-      const stepsAfterAnchor = Math.floor((now.getTime() - anchor) / intervalMs);
-      if (stepsAfterAnchor < 1) return null;
-      return new Date(anchor + stepsAfterAnchor * intervalMs);
-    }
-
     const { hours, minutes } = this.resolveClockTime(reminder.time, timezone);
     const allowedDays =
       reminder.frequency === 'specific_days' && reminder.specificDays?.length
         ? new Set(reminder.specificDays)
         : new Set([0, 1, 2, 3, 4, 5, 6]);
-
-    const offsetMs = getTzOffsetMs(now, timezone);
+    const anchorDay = this.localDayNumber(reminder.createdAt, timezone);
     const nowParts = getTzParts(now, timezone);
 
     for (let back = 0; back < 8; back++) {
@@ -838,18 +847,23 @@ export class ReminderService {
       );
       if (!allowedDays.has(dayInstant.getUTCDay())) continue;
 
-      const candidateMs =
-        Date.UTC(
-          dayInstant.getUTCFullYear(),
-          dayInstant.getUTCMonth(),
-          dayInstant.getUTCDate(),
-          hours,
-          minutes,
-          0,
-          0,
-        ) - offsetMs;
+      const candidateDay = Math.floor(dayInstant.getTime() / 86_400_000);
+      if (
+        reminder.frequency === 'every_other_day' &&
+        (candidateDay < anchorDay || (candidateDay - anchorDay) % 2 !== 0)
+      ) {
+        continue;
+      }
 
-      if (back === 0 && candidateMs > now.getTime()) continue;
+      const candidate = wallClockInstant(
+        dayInstant.getUTCDate(),
+        dayInstant.getUTCMonth() + 1,
+        dayInstant.getUTCFullYear(),
+        hours,
+        timezone,
+      ).getTime();
+      const candidateMs = candidate + minutes * 60_000;
+      if (candidateMs > now.getTime()) continue;
       return new Date(candidateMs);
     }
 

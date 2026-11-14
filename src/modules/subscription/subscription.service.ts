@@ -130,6 +130,7 @@ export class SubscriptionService {
       currency: dto.currency,
       period: dto.period,
       nextPaymentDate: dto.nextPaymentDate,
+      lastReminderPaymentDate: '',
       remindDaysBefore: dto.remindDaysBefore,
       notificationsEnabled: dto.notificationsEnabled,
       status: dto.status,
@@ -166,7 +167,10 @@ export class SubscriptionService {
       subscription.period,
       today,
     );
-    await this.repository.update(subscriptionId, { nextPaymentDate: next });
+    await this.repository.update(subscriptionId, {
+      nextPaymentDate: next,
+      lastReminderPaymentDate: '',
+    });
     return next;
   }
 
@@ -190,13 +194,24 @@ export class SubscriptionService {
 
         if (subscription.nextPaymentDate < today) {
           const next = rollForwardPeriod(subscription.nextPaymentDate, subscription.period, today);
-          await this.repository.update(subscriptionId, { nextPaymentDate: next });
+          await this.repository.update(subscriptionId, {
+            nextPaymentDate: next,
+            lastReminderPaymentDate: '',
+          });
           continue;
         }
 
         const daysLeft = diffDaysBetweenDateStrings(today, subscription.nextPaymentDate);
-        if (subscription.notificationsEnabled && daysLeft === subscription.remindDaysBefore) {
+        if (
+          subscription.notificationsEnabled &&
+          daysLeft >= 0 &&
+          daysLeft <= subscription.remindDaysBefore &&
+          subscription.lastReminderPaymentDate !== subscription.nextPaymentDate
+        ) {
           await this.sendChargeReminder(subscription, daysLeft);
+          await this.repository.update(subscriptionId, {
+            lastReminderPaymentDate: subscription.nextPaymentDate,
+          });
         }
       } catch (error) {
         logger.error({ err: error, subscriptionId }, 'Ошибка обработки подписки');
@@ -239,7 +254,12 @@ export class SubscriptionService {
     }
     const price = priceParts.join(' ≈ ');
 
-    const when = daysLeft === 1 ? 'завтра' : `через ${daysLeft} ${this.pluralDays(daysLeft)}`;
+    const when =
+      daysLeft === 0
+        ? 'сегодня'
+        : daysLeft === 1
+          ? 'завтра'
+          : `через ${daysLeft} ${this.pluralDays(daysLeft)}`;
     const serviceName = subscription.service
       ? `${subscription.name} (${subscription.service})`
       : subscription.name;

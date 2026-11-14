@@ -196,20 +196,19 @@ export const setupSteamCommands = (bot: Bot<BotContext>, reminderService: Remind
         cc,
       );
 
-      const fullMessage =
-        formatMainMessage() +
-        bundlesSection +
-        steam.formatDlcTable(steam.convertEditions(dlcs, options)) +
-        note;
+      const dlcPages = steam.formatDlcPages(steam.convertEditions(dlcs, options));
 
       await ctx.editMessageText(
-        { markdown: fullMessage },
+        { markdown: formatMainMessage() + bundlesSection + note },
         {
           reply_markup: buildGameKeyboard(ctx.services.steam, appId, info, {
             includeDlc: false,
           }) ?? { inline_keyboard: [] },
         },
       );
+      for (const page of dlcPages) {
+        await ctx.replyWithRichMessage({ markdown: page });
+      }
     } catch (error) {
       logger.error({ err: error, appId }, 'Ошибка при получении DLC через callback');
       const keyboard = ctx.callbackQuery.message?.reply_markup?.inline_keyboard;

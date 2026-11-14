@@ -17,21 +17,18 @@ import { GroqProvider } from '../../infrastructure/llm/groq.provider';
 import { LlmUsageService } from '../llm-usage/llm-usage.service';
 import { LlmUsageProvider, LlmUsageSource, LLM_PROVIDERS } from '../llm-usage/llm-usage.types';
 import { getProviderDef } from '../../infrastructure/llm/llm-providers.registry';
+import type { Bot } from 'grammy';
+import type { BotContext } from '../../bot/bot.types';
 
-interface TelegramChatMemberResponse {
-  ok: boolean;
-  result?: {
-    status: 'creator' | 'administrator' | 'member' | 'restricted' | 'left' | 'kicked';
-  };
-  description?: string;
-}
+export type ChatMembership = 'member' | 'not_member' | 'unavailable';
 
 interface CacheEntry {
   isAdmin: boolean;
+  isMember: boolean;
   expiresAt: number;
 }
-const adminCache = new Map<string, CacheEntry>();
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const memberCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 60_000;
 
 interface ModelsCacheEntry {
   models: Array<string>;
@@ -56,6 +53,7 @@ export class ChatService {
     private readonly groqProvider: GroqProvider,
     private readonly cryptoService: CryptoService,
     private readonly llmUsageService: LlmUsageService,
+    private readonly bot: Bot<BotContext>,
   ) {}
 
   private usageRecorder(chatId: number, source: LlmUsageSource): LlmUsageCallback {
@@ -423,55 +421,47 @@ export class ChatService {
     return merged;
   }
 
-  async checkUserIsAdmin(chatId: number, userId: number): Promise<boolean> {
+  private async getChatAccess(
+    chatId: number,
+    userId: number,
+  ): Promise<Pick<CacheEntry, 'isAdmin' | 'isMember'> | null> {
     const cacheKey = `${chatId}:${userId}`;
-    const now = Date.now();
-
-    const cached = adminCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return cached.isAdmin;
+    const cached = memberCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached;
     }
 
     try {
-      const botToken = process.env.BOT_TOKEN;
-      if (!botToken) {
-        throw new Error('Критическая ошибка: BOT_TOKEN не задан в переменных окружения');
-      }
+      const member = await this.bot.api.getChatMember(chatId, userId);
+      const access = {
+        isAdmin: member.status === 'creator' || member.status === 'administrator',
+        isMember:
+          member.status === 'creator' ||
+          member.status === 'administrator' ||
+          member.status === 'member' ||
+          (member.status === 'restricted' && member.is_member),
+      };
 
-      const response = await fetch(
-        `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${userId}`,
-      );
-
-      const data = (await response.json()) as TelegramChatMemberResponse;
-
-      if (!data.ok || !data.result) {
-        logger.warn(
-          { chatId, userId, data },
-          'Telegram API вернул ошибку при проверке прав пользователя',
-        );
-        return false;
-      }
-
-      const status = data.result.status;
-      const isAdmin = status === 'creator' || status === 'administrator';
-
-      adminCache.set(cacheKey, {
-        isAdmin,
-        expiresAt: now + CACHE_TTL_MS,
-      });
-
-      if (adminCache.size > 1000) {
-        adminCache.clear();
-      }
-
-      return isAdmin;
+      memberCache.set(cacheKey, { ...access, expiresAt: Date.now() + CACHE_TTL_MS });
+      if (memberCache.size > 1000) memberCache.clear();
+      return access;
     } catch (error) {
       logger.error(
         { err: error, chatId, userId },
-        'Ошибка сети при запросе getChatMember к Telegram API',
+        'Не удалось проверить пользователя через getChatMember',
       );
-      return false;
+      return null;
     }
+  }
+
+  async checkUserIsMember(chatId: number, userId: number): Promise<ChatMembership> {
+    const access = await this.getChatAccess(chatId, userId);
+    if (!access) return 'unavailable';
+    return access.isMember ? 'member' : 'not_member';
+  }
+
+  async checkUserIsAdmin(chatId: number, userId: number): Promise<boolean> {
+    return (await this.getChatAccess(chatId, userId))?.isAdmin ?? false;
   }
 
   public async getAvailableModels(

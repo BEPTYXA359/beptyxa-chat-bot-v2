@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from 'fastify';
 import { createReminderSchema } from '../../../modules/reminder/reminder.types';
-import { ReminderService } from '../../../modules/reminder/reminder.service';
+import { ReminderNotFoundError, ReminderService } from '../../../modules/reminder/reminder.service';
 import { getTargetChatId } from '../utils/request.util';
 import { logger } from '../../../shared/logger';
 import { z } from 'zod';
@@ -64,6 +64,9 @@ export const reminderRoutes: FastifyPluginAsync<ReminderRoutesOptions> = async (
       await reminderService.updateReminder(id, targetChatId, validationResult.data);
       return reply.send({ success: true, message: 'Напоминание успешно обновлено' });
     } catch (error) {
+      if (error instanceof ReminderNotFoundError) {
+        return reply.status(404).send({ error: error.message });
+      }
       logger.error({ err: error, id }, 'Ошибка редактирования напоминания');
       return reply.status(500).send({ error: 'Не удалось обновить напоминание' });
     }
@@ -71,11 +74,15 @@ export const reminderRoutes: FastifyPluginAsync<ReminderRoutesOptions> = async (
 
   fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const targetChatId = getTargetChatId(request);
 
     try {
-      await reminderService.deleteReminder(id);
+      await reminderService.deleteReminder(id, targetChatId);
       return reply.send({ success: true, message: 'Напоминание успешно удалено' });
     } catch (error) {
+      if (error instanceof ReminderNotFoundError) {
+        return reply.status(404).send({ error: error.message });
+      }
       logger.error({ err: error, id }, 'Ошибка удаления напоминания');
       return reply.status(500).send({ error: 'Внутренняя ошибка сервера' });
     }

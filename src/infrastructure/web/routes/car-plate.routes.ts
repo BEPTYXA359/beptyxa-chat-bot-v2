@@ -1,7 +1,11 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { createCarPlateSchema } from '../../../modules/car-plate/car-plate.types';
-import { CarPlateService, DuplicatePlateError } from '../../../modules/car-plate/car-plate.service';
+import {
+  CarPlateNotFoundError,
+  CarPlateService,
+  DuplicatePlateError,
+} from '../../../modules/car-plate/car-plate.service';
 import { getTargetChatId } from '../utils/request.util';
 import { logger } from '../../../shared/logger';
 
@@ -69,6 +73,9 @@ export const carPlateRoutes: FastifyPluginAsync<CarPlateRoutesOptions> = async (
       await carPlateService.updatePlate(id, targetChatId, validationResult.data);
       return reply.send({ success: true, message: 'Номер успешно обновлён' });
     } catch (error) {
+      if (error instanceof CarPlateNotFoundError) {
+        return reply.status(404).send({ error: error.message });
+      }
       if (error instanceof DuplicatePlateError) {
         return reply.status(409).send({ error: error.message });
       }
@@ -81,11 +88,15 @@ export const carPlateRoutes: FastifyPluginAsync<CarPlateRoutesOptions> = async (
 
   fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const targetChatId = getTargetChatId(request);
 
     try {
-      await carPlateService.deletePlate(id);
+      await carPlateService.deletePlate(id, targetChatId);
       return reply.send({ success: true, message: 'Номер успешно удалён' });
     } catch (error) {
+      if (error instanceof CarPlateNotFoundError) {
+        return reply.status(404).send({ error: error.message });
+      }
       logger.error({ err: error, id }, 'Ошибка удаления номера');
       return reply.status(500).send({ error: 'Внутренняя ошибка сервера' });
     }

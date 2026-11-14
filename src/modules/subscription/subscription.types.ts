@@ -56,6 +56,7 @@ export interface SubscriptionDocument {
   currency: string;
   period: SubscriptionPeriod;
   nextPaymentDate: string;
+  lastReminderPaymentDate?: string;
   remindDaysBefore: SubscriptionRemindDaysBefore;
   notificationsEnabled: boolean;
   status: SubscriptionStatus;

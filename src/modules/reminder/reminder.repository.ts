@@ -5,6 +5,7 @@ export interface AgendaJobInfo {
   reminderId: string;
   name: string;
   nextRunAt: Date | null;
+  repeatInterval?: string | undefined;
 }
 
 export class ReminderRepository {
@@ -26,8 +27,15 @@ export class ReminderRepository {
     return reminder;
   }
 
-  public async update(id: string, updateData: Partial<ReminderDocument>): Promise<void> {
-    await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: updateData });
+  public async update(
+    id: string,
+    updateData: Partial<ReminderDocument>,
+    chatId?: number,
+  ): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id), ...(chatId === undefined ? {} : { chatId }) },
+      { $set: updateData },
+    );
   }
 
   public async getAll(): Promise<ReminderDocument[]> {
@@ -60,25 +68,34 @@ export class ReminderRepository {
     return this.collection.find({ kind: 'steam_release' }).toArray();
   }
 
-  public async delete(id: string): Promise<void> {
-    await this.collection.deleteOne({ _id: new ObjectId(id) });
+  public async delete(id: string, chatId?: number): Promise<void> {
+    await this.collection.deleteOne({
+      _id: new ObjectId(id),
+      ...(chatId === undefined ? {} : { chatId }),
+    });
   }
 
   public async getAgendaJobs(): Promise<AgendaJobInfo[]> {
     const docs = await this.agendaCollection
       .find(
         { 'data.reminderId': { $type: 'string' } },
-        { projection: { name: 1, 'data.reminderId': 1, nextRunAt: 1 } },
+        { projection: { name: 1, 'data.reminderId': 1, nextRunAt: 1, repeatInterval: 1 } },
       )
       .toArray();
 
     return docs
-      .map((doc) => {
+      .map((doc): AgendaJobInfo | null => {
         const reminderId = (doc as { data?: { reminderId?: string } }).data?.reminderId;
         if (typeof reminderId !== 'string') return null;
         const nextRunAt = (doc as { nextRunAt?: Date | null }).nextRunAt ?? null;
         const name = (doc as { name?: string }).name ?? '';
-        return { reminderId, nextRunAt, name };
+        const repeatInterval = (doc as { repeatInterval?: string }).repeatInterval;
+        return {
+          reminderId,
+          nextRunAt,
+          name,
+          ...(repeatInterval === undefined ? {} : { repeatInterval }),
+        };
       })
       .filter((item): item is AgendaJobInfo => item !== null);
   }

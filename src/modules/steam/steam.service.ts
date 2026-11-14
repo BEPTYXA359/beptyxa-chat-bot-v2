@@ -474,6 +474,50 @@ export class SteamService {
     return parts.join('\n');
   }
 
+  public formatDlcPages(dlcs: ConvertedEdition[], maxLength = 4000): string[] {
+    const pages: string[] = [];
+    let current: ConvertedEdition[] = [];
+
+    for (const dlc of dlcs) {
+      const candidate = [...current, dlc];
+      if (current.length > 0 && this.formatDlcTable(candidate).length > maxLength) {
+        pages.push(this.formatDlcTable(current));
+        current = [dlc];
+      } else {
+        current = candidate;
+      }
+
+      if (current.length === 1 && this.formatDlcTable(current).length > maxLength) {
+        pages.push(this.formatSingleDlcWithinLimit(dlc, maxLength));
+        current = [];
+      }
+    }
+
+    if (current.length > 0) pages.push(this.formatDlcTable(current));
+    return pages;
+  }
+
+  private formatSingleDlcWithinLimit(dlc: ConvertedEdition, maxLength: number): string {
+    let low = 0;
+    let high = dlc.name.length;
+    let result = '';
+
+    while (low <= high) {
+      const length = Math.floor((low + high) / 2);
+      const name = length === dlc.name.length ? dlc.name : `${dlc.name.slice(0, length)}…`;
+      const formatted = this.formatDlcTable([{ ...dlc, name }]);
+      if (formatted.length <= maxLength) {
+        result = formatted;
+        low = length + 1;
+      } else {
+        high = length - 1;
+      }
+    }
+
+    if (!result) throw new Error('Лимит сообщения слишком мал для таблицы DLC');
+    return result;
+  }
+
   public formatDlcTable(dlcs: ConvertedEdition[]): string {
     const lines: string[] = [];
     lines.push('');

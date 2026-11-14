@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { logger } from '../../shared/logger';
 import { config } from '../../shared/config';
 import { telegramAuthHook } from './middlewares/telegram-auth.middleware';
+import { createChatAuthorizationHook } from './middlewares/chat-authorization.middleware';
 import { ChatService } from '../../modules/chat/chat.service';
 import { settingsRoutes } from './routes/settings.routes';
 import { reminderRoutes } from './routes/reminder.routes';
@@ -66,6 +67,7 @@ export class WebServer {
 
     this.app.register(async (protectedInstance) => {
       protectedInstance.addHook('preValidation', telegramAuthHook);
+      protectedInstance.addHook('preHandler', createChatAuthorizationHook(this.chatService));
 
       protectedInstance.register(settingsRoutes, {
         prefix: '/api/settings',

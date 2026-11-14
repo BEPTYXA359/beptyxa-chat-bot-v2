@@ -66,7 +66,7 @@ export class ChatRepository {
   }
 
   public async updateChatSettings(chatId: number, updates: Partial<ChatSettings>) {
-    const setPayload: Record<string, any> = {};
+    const setPayload: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {

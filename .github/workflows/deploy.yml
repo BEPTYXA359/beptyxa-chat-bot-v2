@@ -9,6 +9,30 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -30,9 +54,9 @@ jobs:
           envs: BOT_TOKEN,MONGO_URI,MONGO_DB_NAME,EXCHANGE_APP_ID,ENCRYPTION_KEY,GROQ_API_KEY,GROQ_MODEL,GROQ_BASE_URL,GROQ_PROXY_TOKEN,APP_URL,APP_SHORTNAME
           script: |
             cd /projects/beptyxa-chat-bot-v2
-            
+
             git pull origin main
-            
+
             echo "BOT_TOKEN=$BOT_TOKEN" > .env
             echo "MONGO_URI=$MONGO_URI" >> .env
             echo "MONGO_DB_NAME=$MONGO_DB_NAME" >> .env
@@ -44,7 +68,8 @@ jobs:
             if [ -n "$GROQ_BASE_URL" ]; then echo "GROQ_BASE_URL=$GROQ_BASE_URL" >> .env; fi
             if [ -n "$GROQ_PROXY_TOKEN" ]; then echo "GROQ_PROXY_TOKEN=$GROQ_PROXY_TOKEN" >> .env; fi
             echo "APP_URL=$APP_URL" >> .env
-            
+            echo "APP_SHORTNAME=$APP_SHORTNAME" >> .env
+
             docker-compose up -d --build
-            
+
             docker image prune -f

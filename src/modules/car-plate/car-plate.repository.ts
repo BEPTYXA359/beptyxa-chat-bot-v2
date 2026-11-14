@@ -27,11 +27,21 @@ export class CarPlateRepository {
     return this.collection.findOne({ _id: new ObjectId(id) });
   }
 
-  public async update(id: string, updateData: Partial<CarPlateDocument>): Promise<void> {
-    await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: updateData });
+  public async update(
+    id: string,
+    updateData: Partial<CarPlateDocument>,
+    chatId?: number,
+  ): Promise<void> {
+    await this.collection.updateOne(
+      { _id: new ObjectId(id), ...(chatId === undefined ? {} : { chatId }) },
+      { $set: updateData },
+    );
   }
 
-  public async delete(id: string): Promise<void> {
-    await this.collection.deleteOne({ _id: new ObjectId(id) });
+  public async delete(id: string, chatId?: number): Promise<void> {
+    await this.collection.deleteOne({
+      _id: new ObjectId(id),
+      ...(chatId === undefined ? {} : { chatId }),
+    });
   }
 }

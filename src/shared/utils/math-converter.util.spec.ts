@@ -269,6 +269,6 @@ describe('splitMessage with math blocks', () => {
     const text = `${'строка'}\n`.repeat(1000);
     const chunks = splitMessage(text);
     expect(chunks.length).toBeGreaterThanOrEqual(2);
-    expect(chunks.map((chunk) => chunk.length).every((len) => len <= 4100)).toBe(true);
+    expect(chunks.map((chunk) => chunk.length).every((len) => len <= 4000)).toBe(true);
   });
 });

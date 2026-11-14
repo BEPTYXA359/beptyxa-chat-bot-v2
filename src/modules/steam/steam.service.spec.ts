@@ -268,3 +268,33 @@ describe('convertEditions', () => {
     expect(service.formatDlcTable(converted)).not.toContain('~');
   });
 });
+
+describe('formatDlcPages', () => {
+  it('разбивает длинный список на валидные таблицы в пределах лимита', () => {
+    const service = createService(vi.fn().mockReturnValue(100));
+    const editions: EditionInfo[] = Array.from({ length: 30 }, (_, index) => ({
+      name: `DLC-${index}: ${'DLC'.repeat(30)}`,
+      originalPrice: null,
+      finalPrice: 1000,
+      discountPercent: null,
+      isFree: false,
+      currency: 'KZT',
+    }));
+    const converted = service.convertEditions(editions, {
+      path: 'converter',
+      targetCurrency: 'RUB',
+      ratesSource: 'openexchangerates',
+      extraPercent: 0,
+    });
+
+    const pages = service.formatDlcPages(converted, 500);
+
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every((page) => page.length <= 500)).toBe(true);
+    expect(pages.every((page) => page.includes('<h4>DLC</h4>'))).toBe(true);
+    expect(pages.every((page) => page.includes('</table>'))).toBe(true);
+    for (let index = 0; index < editions.length; index++) {
+      expect(pages.filter((page) => page.includes(`DLC-${index}: `))).toHaveLength(1);
+    }
+  });
+});

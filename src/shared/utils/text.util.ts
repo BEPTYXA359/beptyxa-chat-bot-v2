@@ -42,31 +42,112 @@ export function pluralRu(n: number, one: string, few: string, many: string): str
   return many;
 }
 
+function hardSplit(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < text.length) {
+    let end = Math.min(offset + maxLength, text.length);
+    if (end - offset > 1 && end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) {
+      end--;
+    }
+    chunks.push(text.slice(offset, end));
+    offset = end;
+  }
+  return chunks;
+}
+
+function splitLines(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const line of text.split(/(?<=\n)/)) {
+    if (!line) continue;
+    if (line.length > maxLength) {
+      if (current) chunks.push(current);
+      chunks.push(...hardSplit(line, maxLength));
+      current = '';
+    } else {
+      if (current && current.length + line.length > maxLength) {
+        chunks.push(current);
+        current = '';
+      }
+      current += line;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function splitCodeBlock(text: string, maxLength: number): string[] {
+  const openingEnd = text.indexOf('\n');
+  const closingStart = text.lastIndexOf('```');
+  if (openingEnd < 0 || closingStart <= openingEnd) return hardSplit(text, maxLength);
+
+  const opening = text.slice(0, openingEnd + 1);
+  if (maxLength < opening.length + 5) return hardSplit(text, maxLength);
+
+  const body = text.slice(opening.length, closingStart);
+  const trailing = text.endsWith('\n') ? '\n' : '';
+  const chunks = splitLines(body, maxLength - opening.length - 5).map(
+    (piece) => `${opening}${piece}${piece.endsWith('\n') ? '' : '\n'}\`\`\``,
+  );
+  if (trailing) chunks[chunks.length - 1] += trailing;
+  return chunks;
+}
+
+function splitMathBlock(text: string, maxLength: number): string[] {
+  const opening = text.startsWith('$$') ? '$$' : '\\[';
+  const closing = opening === '$$' ? '$$' : '\\]';
+  const closingStart = text.lastIndexOf(closing);
+  if (closingStart < opening.length) return hardSplit(text, maxLength);
+
+  const body = text.slice(opening.length, closingStart);
+  const trailing = text.slice(closingStart + closing.length);
+  return [...hardSplit(body, maxLength), ...hardSplit(trailing, maxLength)];
+}
+
+function splitOversizedUnit(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
+  if (text.startsWith('```')) return splitCodeBlock(text, maxLength);
+  if (text.startsWith('$$') || text.startsWith('\\[')) return splitMathBlock(text, maxLength);
+  return hardSplit(text, maxLength);
+}
+
+function blockUnits(text: string): string[] {
+  const units: string[] = [];
+  const state: BlockState = { fence: false, dollarBlock: false, bracketBlock: false };
+  let current = '';
+
+  for (const line of text.split(/(?<=\n)/)) {
+    if (!line) continue;
+    current += line;
+    if (!advancesBlockState(line, state)) {
+      units.push(current);
+      current = '';
+    }
+  }
+  if (current) units.push(current);
+  return units;
+}
+
 export function splitMessage(text: string, maxLength: number = 4000): string[] {
+  if (maxLength < 1) throw new RangeError('maxLength должен быть положительным');
   if (text.length <= maxLength) return [text];
 
   const chunks: string[] = [];
   let currentChunk = '';
-  const state: BlockState = { fence: false, dollarBlock: false, bracketBlock: false };
 
-  const paragraphs = text.split('\n');
-
-  for (const paragraph of paragraphs) {
-    const openBefore = state.fence || state.dollarBlock || state.bracketBlock;
-    const openAfter = advancesBlockState(paragraph, state);
-    const overLimit = currentChunk.length + paragraph.length > maxLength;
-
-    if (currentChunk && overLimit && !openBefore && !openAfter) {
-      chunks.push(currentChunk);
-      currentChunk = paragraph + '\n';
-    } else {
-      currentChunk += paragraph + '\n';
+  for (const unit of blockUnits(text)) {
+    for (const piece of splitOversizedUnit(unit, maxLength)) {
+      if (currentChunk && currentChunk.length + piece.length > maxLength) {
+        chunks.push(currentChunk);
+        currentChunk = '';
+      }
+      currentChunk += piece;
     }
   }
 
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk);
-  }
-
+  if (currentChunk) chunks.push(currentChunk);
   return chunks;
 }
