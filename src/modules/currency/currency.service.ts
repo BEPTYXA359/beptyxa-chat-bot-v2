@@ -1,7 +1,15 @@
 import schedule from 'node-schedule';
 import { logger } from '../../shared/logger';
-import { RatesSource, RATES_SOURCE_LABELS, SourceRates, TbankRates } from './currency.types';
+import { Database } from '../../infrastructure/mongo/mongo.client';
+import {
+  RatesSource,
+  RATES_SOURCE_LABELS,
+  RATES_SOURCES,
+  SourceRates,
+  TbankRates,
+} from './currency.types';
 import { filterSteamCurrencies } from '../steam/steam-regions.const';
+import { CurrencyRepository } from './currency.repository';
 import {
   fetchCbrfRates,
   fetchOpenExchangeRates,
@@ -9,16 +17,27 @@ import {
   fetchTbankRates,
 } from './currency.providers';
 
+/** Календарный день по МСК — единица «свежести» курсов (обновляем не чаще раза в сутки) */
+export function moscowDay(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(date);
+}
+
 export class CurrencyService {
   private ratesBySource = new Map<RatesSource, SourceRates>();
+  private lastRefreshDates = new Map<RatesSource, string>();
   private job: schedule.Job | null = null;
   private steamRetryTimer: NodeJS.Timeout | null = null;
+  private repository: CurrencyRepository | null;
 
-  constructor() {}
+  constructor(repository: CurrencyRepository | null = null) {
+    this.repository = repository;
+  }
 
   public async init(): Promise<void> {
+    this.repository ??= new CurrencyRepository((await Database.getInstance()).getDb());
+    await this.preloadRatesFromDb();
     // OXR нужен сразу (дефолтный источник), остальные догружаем в фоне —
-    // сбор цен с торговой площадки Steam занимает ~2 минуты из-за троттлинга
+    // сбор цен с торговой площадки Steam занимает ~4 минуты из-за троттлинга
     await this.refreshSource('openexchangerates');
     void this.refreshSource('cbrf')
       .then(() => this.refreshSource('tbank'))
@@ -52,6 +71,10 @@ export class CurrencyService {
 
   /** Загружает (или обновляет) курсы одного источника; при ошибке остаются прежние курсы */
   public async refreshSource(source: RatesSource): Promise<void> {
+    if (this.isRefreshedToday(source)) {
+      logger.info(`Курсы (${RATES_SOURCE_LABELS[source]}) уже обновлялись сегодня — пропускаю`);
+      return;
+    }
     try {
       switch (source) {
         case 'openexchangerates':
@@ -78,6 +101,8 @@ export class CurrencyService {
         }
       }
       logger.info(`Курсы (${RATES_SOURCE_LABELS[source]}) успешно обновлены`);
+      this.lastRefreshDates.set(source, moscowDay(new Date()));
+      await this.persistRates(source, this.ratesBySource.get(source));
     } catch (error) {
       // при ошибке оставляем предыдущие курсы, если они были
       logger.error({ err: error }, `Ошибка при обновлении курсов (${RATES_SOURCE_LABELS[source]})`);
@@ -105,12 +130,20 @@ export class CurrencyService {
       await this.refreshSource('openexchangerates');
       oxr = this.ratesBySource.get('openexchangerates');
     }
-    if (!oxr) return null;
-    if (!('rates' in oxr)) return null;
     if (!market) {
+      // свежего маркета нет — сначала пробуем сохранённую в базе копию
+      // (переживаем рестарты и троттлинг Steam), и только без неё подменяем OXR
+      const stored = await this.repository?.getRates('steam');
+      if (stored && 'rates' in stored) {
+        logger.info('Курсы Steam взяты из сохранённой в базе копии');
+        const filler = oxr && 'rates' in oxr ? filterSteamCurrencies(oxr.rates) : {};
+        return { base: 'USD', rates: { ...filler, ...filterSteamCurrencies(stored.rates) } };
+      }
+      if (!oxr || !('rates' in oxr)) return null;
       logger.warn('Курсы Steam временно заменены рыночными из OpenExchangeRates');
       return { base: 'USD', rates: filterSteamCurrencies(oxr.rates) };
     }
+    if (!oxr || !('rates' in oxr)) return null;
     if (!('rates' in market)) {
       return market;
     }
@@ -143,6 +176,43 @@ export class CurrencyService {
       10 * 60 * 1000,
     );
     this.steamRetryTimer.unref?.();
+  }
+
+  private isRefreshedToday(source: RatesSource): boolean {
+    return this.lastRefreshDates.get(source) === moscowDay(new Date());
+  }
+
+  /** Подтягивает последние успешные курсы каждого источника из базы — фолбэк до первого фетча */
+  private async preloadRatesFromDb(): Promise<void> {
+    if (!this.repository) return;
+    for (const source of RATES_SOURCES) {
+      try {
+        const entry = await this.repository.getEntry(source);
+        if (!entry) continue;
+        this.ratesBySource.set(source, entry.rates);
+        // штамп из базы: сегодня уже обновлялись до рестарта — автопборы пропустят
+        this.lastRefreshDates.set(source, moscowDay(entry.updatedAt));
+        logger.info(`Курсы (${RATES_SOURCE_LABELS[source]}) восстановлены из базы`);
+      } catch (error) {
+        logger.warn(
+          { err: error },
+          `Не удалось восстановить курсы (${RATES_SOURCE_LABELS[source]}) из базы`,
+        );
+      }
+    }
+  }
+
+  /** Ошибка записи в базу не должна ронять обновление курсов — только предупредить */
+  private async persistRates(source: RatesSource, rates: SourceRates | undefined): Promise<void> {
+    if (!this.repository || !rates) return;
+    try {
+      await this.repository.saveRates(source, rates);
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        `Не удалось сохранить курсы (${RATES_SOURCE_LABELS[source]}) в базу`,
+      );
+    }
   }
 
   /**

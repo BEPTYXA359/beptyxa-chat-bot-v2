@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import type { SourceRates } from './currency.types';
 
 // мок Т-Банка до импорта модулей: реальный запрос идёт через node:https (не fetch).
 // KZT банком не котируется — в тестах композита она собирается из USD банка + ЦБ РФ
@@ -28,7 +29,7 @@ vi.mock('./tbank.http', () => ({
 
 // импорт сервиса тянет logger → config, который требует NODE_ENV=development|production (vitest ставит test)
 process.env.NODE_ENV = 'development';
-const { CurrencyService } = await import('./currency.service');
+const { CurrencyService, moscowDay } = await import('./currency.service');
 
 type Service = InstanceType<typeof CurrencyService>;
 
@@ -44,8 +45,45 @@ const stubFetchUrl = (urlPart: string, payload: unknown): void => {
   );
 };
 
+interface StoredRatesEntry {
+  rates: SourceRates;
+  updatedAt: Date;
+}
+
+const makeRepository = (entries: Record<string, StoredRatesEntry> = {}) => ({
+  entries,
+  getEntry: async (source: string) => entries[source] ?? null,
+  getRates: async (source: string) => entries[source]?.rates ?? null,
+  saveRates: async (source: string, rates: SourceRates) => {
+    entries[source] = { rates, updatedAt: new Date() };
+  },
+  ensureIndexes: async () => {},
+});
+
+/** Свежий сервис с чистым состоянием провайдеров — без влияния предыдущих тестов */
+const loadService = async (repository?: unknown) => {
+  vi.resetModules();
+  const { CurrencyService: FreshCurrencyService } = await import('./currency.service');
+  return new FreshCurrencyService(repository as ConstructorParameters<typeof CurrencyService>[0]);
+};
+
+/** Прокрутка фейковых таймеров до завершения refreshSource (спейсинг 3 с + ретрай 60 с) */
+const settleRefresh = async (refresh: Promise<void>): Promise<void> => {
+  vi.useFakeTimers();
+  let settled = false;
+  const outcome = refresh.finally(() => {
+    settled = true;
+  });
+  for (let i = 0; i < 300 && !settled; i++) {
+    await vi.advanceTimersByTimeAsync(10_000);
+  }
+  vi.useRealTimers();
+  await outcome;
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('CurrencyService.convert (табличные источники)', () => {
@@ -169,5 +207,151 @@ describe('CurrencyService (направленные курсы Т-Банка + �
     await service.refreshSource('tbank');
 
     expect(() => service.convert(1, 'KZT', 'RUB', 'tbank')).toThrow('Т-Банк не котирует KZT');
+  });
+});
+
+describe('CurrencyService (персистентность курсов в базе)', () => {
+  it('при инициализации восстанавливает курсы из базы до обновления источников', async () => {
+    const stored = { base: 'USD', rates: { RUB: 91 } };
+    const repository = makeRepository({
+      openexchangerates: { rates: stored, updatedAt: new Date(Date.now() - 26 * 3600 * 1000) },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    );
+
+    const service = await loadService(repository);
+    await service.init();
+
+    expect(service.getRates('openexchangerates')).toEqual(stored);
+    service.destroy();
+  });
+
+  it('сохраняет обновлённые курсы источника в базу', async () => {
+    const repository = makeRepository();
+    stubFetchUrl('cbr-xml-daily.ru', {
+      Valute: { USD: { CharCode: 'USD', Nominal: 1, Value: 85 } },
+    });
+
+    const service = await loadService(repository);
+    await service.refreshSource('cbrf');
+
+    expect(repository.entries.cbrf?.rates).toEqual({ base: 'USD', rates: { RUB: 85, USD: 1 } });
+  });
+
+  it('при недоступном маркете использует сохранённые steam-курсы из базы, а не OXR', async () => {
+    const storedSteam = { base: 'USD', rates: { RUB: 90, KZT: 450 } };
+    const repository = makeRepository({
+      steam: { rates: storedSteam, updatedAt: new Date(Date.now() - 26 * 3600 * 1000) },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        if (String(url).includes('steamcommunity.com')) {
+          return new Response('too many requests', { status: 429 });
+        }
+        throw new Error(`unexpected fetch: ${String(url)}`);
+      }),
+    );
+
+    const service = await loadService(repository);
+    await settleRefresh(service.refreshSource('steam'));
+
+    expect(service.getRates('steam')).toEqual(storedSteam);
+  });
+
+  it('без маркета и без базы подставляет рыночные курсы OXR (прежний фолбэк)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        if (String(url).includes('steamcommunity.com')) {
+          return new Response('too many requests', { status: 429 });
+        }
+        if (String(url).includes('openexchangerates.org')) {
+          return new Response(JSON.stringify({ base: 'USD', rates: { RUB: 92, KZT: 450 } }), {
+            status: 200,
+          });
+        }
+        throw new Error(`unexpected fetch: ${String(url)}`);
+      }),
+    );
+
+    const service = await loadService();
+    await settleRefresh(service.refreshSource('steam'));
+
+    const rates = service.getRates('steam');
+    expect(rates && 'rates' in rates && rates.rates.RUB).toBeCloseTo(92);
+    expect(rates && 'rates' in rates && rates.rates.KZT).toBeCloseTo(450);
+  });
+});
+
+describe('CurrencyService (свежесть курсов: не чаще раза в сутки по МСК)', () => {
+  it('moscowDay возвращает календарный день по МСК', () => {
+    expect(moscowDay(new Date('2026-03-15T10:00:00+03:00'))).toBe('2026-03-15');
+    expect(moscowDay(new Date('2026-03-15T23:30:00+03:00'))).toBe('2026-03-15');
+    expect(moscowDay(new Date('2026-03-16T01:30:00+03:00'))).toBe('2026-03-16');
+  });
+
+  it('при инициализации не дёргает API, если в базе уже сегодняшние курсы', async () => {
+    const repository = makeRepository({
+      openexchangerates: { rates: { base: 'USD', rates: { RUB: 91 } }, updatedAt: new Date() },
+      cbrf: { rates: { base: 'USD', rates: { RUB: 85 } }, updatedAt: new Date() },
+      tbank: {
+        rates: { base: 'RUB', pairs: { USD: { buy: 83, sell: 89 } } },
+        updatedAt: new Date(),
+      },
+      steam: { rates: { base: 'USD', rates: { RUB: 90 } }, updatedAt: new Date() },
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'must not be called' }), { status: 500 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const service = await loadService(repository);
+    await service.init();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(service.getRates('openexchangerates')).toEqual({ base: 'USD', rates: { RUB: 91 } });
+    service.destroy();
+  });
+
+  it('при инициализации обновляет источник, если в базе курсы не сегодняшние', async () => {
+    const repository = makeRepository({
+      openexchangerates: {
+        rates: { base: 'USD', rates: { RUB: 91 } },
+        updatedAt: new Date(Date.now() - 26 * 3600 * 1000),
+      },
+    });
+    stubFetchUrl('openexchangerates.org', { base: 'USD', rates: { RUB: 95 } });
+
+    const service = await loadService(repository);
+    await service.init();
+
+    expect(service.getRates('openexchangerates')).toEqual({ base: 'USD', rates: { RUB: 95 } });
+    service.destroy();
+  });
+
+  it('повторное обновление источника в тот же день не ходит в API', async () => {
+    const repository = makeRepository();
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('cbr-xml-daily.ru')) {
+        return new Response(
+          JSON.stringify({ Valute: { USD: { CharCode: 'USD', Nominal: 1, Value: 85 } } }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const service = await loadService(repository);
+    await service.refreshSource('cbrf');
+    await service.refreshSource('cbrf');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(service.getRates('cbrf')).toEqual({ base: 'USD', rates: { RUB: 85, USD: 1 } });
   });
 });

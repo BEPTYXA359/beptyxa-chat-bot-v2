@@ -120,11 +120,31 @@ const MARKET_CURRENCY_IDS: Record<string, number> = {
   UYU: 41,
 };
 
+/** Устойчивый 429 от Steam: повторные запросы бессмысленны, пока лимит не снимут */
+export class SteamRateLimitError extends Error {
+  constructor() {
+    super('Steam Market: превышен лимит запросов (429)');
+    this.name = 'SteamRateLimitError';
+  }
+}
+
 const MARKET_REQUEST_DELAY_MS = 3000;
 const MARKET_REQUEST_TIMEOUT_MS = 15_000;
-const MARKET_RATE_LIMIT_RETRY_MS = 15_000;
+// Steam смягчает троттлинг не раньше минуты тишины, 15 с не хватало
+const MARKET_RATE_LIMIT_RETRY_MS = 60_000;
 const MARKET_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
+
+/**
+ * В дев-режиме маркет опрашивается только по трём главным валютам:
+ * проход занимает ~18 секунд вместо ~4 минут и не упирается в лимиты Steam.
+ */
+const DEV_MARKET_CURRENCIES = new Set(['USD', 'RUB', 'KZT']);
+
+function marketCurrencyEntries(): [string, number][] {
+  if (config.NODE_ENV !== 'development') return Object.entries(MARKET_CURRENCY_IDS);
+  return Object.entries(MARKET_CURRENCY_IDS).filter(([code]) => DEV_MARKET_CURRENCIES.has(code));
+}
 
 let lastMarketRequestTime = 0;
 
@@ -145,10 +165,11 @@ async function marketThrottledFetch(url: string): Promise<unknown> {
       signal: AbortSignal.timeout(MARKET_REQUEST_TIMEOUT_MS),
     });
     if (response.status === 429 && attempt === 0) continue;
+    if (response.status === 429) throw new SteamRateLimitError();
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     return response.json();
   }
-  throw new Error('HTTP error! status: 429');
+  throw new SteamRateLimitError();
 }
 
 /**
@@ -173,7 +194,10 @@ export async function fetchSteamMarketRates(): Promise<RatesTable> {
     }
   }
 
-  if (Object.keys(mergedRates).length < 4) {
+  if (
+    Object.keys(mergedRates).length <
+    (config.NODE_ENV === 'development' ? DEV_MARKET_CURRENCIES.size : 4)
+  ) {
     throw new Error('Торговая площадка Steam не дала достаточно валют для курсов');
   }
 
@@ -184,7 +208,7 @@ export async function fetchSteamMarketRates(): Promise<RatesTable> {
 async function fetchItemPrices(itemName: string): Promise<Record<string, number> | null> {
   const prices: Record<string, number> = {};
 
-  for (const [code, currencyId] of Object.entries(MARKET_CURRENCY_IDS)) {
+  for (const [code, currencyId] of marketCurrencyEntries()) {
     try {
       const url =
         'https://steamcommunity.com/market/priceoverview/?appid=730' +
@@ -194,6 +218,9 @@ async function fetchItemPrices(itemName: string): Promise<Record<string, number>
       const price = parseMarketPrice(overview.lowest_price);
       if (Number.isFinite(price) && price > 0) prices[code] = price;
     } catch (error) {
+      // при устойчивом 429 остальные запросы прохода обречены — рвём сразу,
+      // сервис откатится на OXR и повторит попытку позже
+      if (error instanceof SteamRateLimitError) throw error;
       logger.warn(
         { err: error, code, itemName },
         'Ошибка при получении цены предмета в Steam Market',
