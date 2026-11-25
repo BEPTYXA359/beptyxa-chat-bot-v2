@@ -6,6 +6,7 @@ import { createBot } from './bot/bot';
 import { logger } from './shared/logger';
 import { Database } from './infrastructure/mongo/mongo.client';
 
+import { CurrencyRepository } from './modules/currency/currency.repository';
 import { CurrencyService } from './modules/currency/currency.service';
 import { OpenAiProvider } from './infrastructure/llm/openai.provider';
 import { GroqProvider } from './infrastructure/llm/groq.provider';
@@ -40,6 +41,12 @@ import { ConversionSettingsService } from './modules/conversion/conversion-setti
 import { LlmUsageRepository } from './modules/llm-usage/llm-usage.repository';
 import { LlmUsageService } from './modules/llm-usage/llm-usage.service';
 
+import { F1Repository } from './modules/f1/f1.repository';
+import { F1SubscribersRepository } from './modules/f1/f1-subscribers.repository';
+import { JolpicaProvider } from './modules/f1/jolpica.provider';
+import { F1Service } from './modules/f1/f1.service';
+import { F1Scheduler } from './modules/f1/f1.scheduler';
+
 async function bootstrap() {
   try {
     logger.info('Инициализация приложения...');
@@ -54,7 +61,9 @@ async function bootstrap() {
       }),
     });
 
-    const currencyService = new CurrencyService();
+    const currencyRepository = new CurrencyRepository(db);
+    await currencyRepository.ensureIndexes();
+    const currencyService = new CurrencyService(currencyRepository);
     await currencyService.init();
     const cryptoService = new CryptoService();
 
@@ -110,7 +119,30 @@ async function bootstrap() {
       conversionSettingsService,
     );
 
+    const f1Repository = new F1Repository(db);
+    const f1SubscribersRepository = new F1SubscribersRepository(db);
+    await f1Repository.ensureIndexes();
+    await f1SubscribersRepository.ensureIndexes();
+    try {
+      await f1Repository.deletePracticeResults();
+    } catch (error) {
+      logger.warn({ err: error }, 'Не удалось очистить кэш протоколов практик Ф1');
+    }
+    const f1Service = new F1Service(f1Repository, f1SubscribersRepository, new JolpicaProvider());
+    const f1Scheduler = new F1Scheduler(
+      agenda,
+      f1Service,
+      f1Repository,
+      f1SubscribersRepository,
+      bot,
+    );
+
     await agenda.start();
+    try {
+      await f1Scheduler.init();
+    } catch (error) {
+      logger.error({ err: error }, 'Ошибка инициализации планировщика Ф1');
+    }
     await reminderService.scheduleSteamCheckJob();
     await reminderService.reconcileJobs();
     await reminderService.catchUpMissed();
@@ -157,6 +189,8 @@ async function bootstrap() {
       currencyService,
       conversionSettingsService,
       llmUsageService,
+      f1Service,
+      f1Scheduler,
     );
     await webServer.init();
     await webServer.start();

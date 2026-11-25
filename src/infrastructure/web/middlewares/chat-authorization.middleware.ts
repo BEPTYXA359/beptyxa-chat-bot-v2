@@ -1,6 +1,6 @@
-import { FastifyReply, FastifyRequest } from 'fastify';
-import { ChatService } from '../../../modules/chat/chat.service';
-import { chatQuerySchema, getTargetChatId } from '../utils/request.util';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { ChatService } from '../../../modules/chat/chat.service';
+import { chatPathSchema, chatQuerySchema, getTargetChatId } from '../utils/request.util';
 
 export const createChatAuthorizationHook =
   (chatService: ChatService) => async (request: FastifyRequest, reply: FastifyReply) => {
@@ -10,8 +10,16 @@ export const createChatAuthorizationHook =
     }
 
     const query = chatQuerySchema.safeParse(request.query);
-    if (!query.success) {
+    const params = chatPathSchema.safeParse(request.params);
+    if (!query.success || !params.success) {
       return reply.status(400).send({ error: 'Некорректный chatId' });
+    }
+    if (
+      query.data.chatId !== undefined &&
+      params.data.chatId !== undefined &&
+      query.data.chatId !== params.data.chatId
+    ) {
+      return reply.status(400).send({ error: 'chatId в path и query должен совпадать' });
     }
 
     const targetChatId = getTargetChatId(request);
@@ -22,7 +30,6 @@ export const createChatAuthorizationHook =
 
     const membership = await chatService.checkUserIsMember(targetChatId, userId);
     if (membership === 'member') return;
-
     if (membership === 'not_member') {
       return reply.status(403).send({ error: 'Нет доступа: вы не состоите в этом чате' });
     }

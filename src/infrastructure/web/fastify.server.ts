@@ -18,6 +18,9 @@ import { conversionSettingsRoutes } from './routes/conversion-settings.routes';
 import { ConversionSettingsService } from '../../modules/conversion/conversion-settings.service';
 import { llmUsageRoutes } from './routes/llm-usage.routes';
 import { LlmUsageService } from '../../modules/llm-usage/llm-usage.service';
+import { F1Service } from '../../modules/f1/f1.service';
+import { F1Scheduler } from '../../modules/f1/f1.scheduler';
+import { f1Routes } from './routes/f1.routes';
 
 export class WebServer {
   public readonly app: FastifyInstance;
@@ -28,6 +31,8 @@ export class WebServer {
   private readonly currencyService: CurrencyService;
   private readonly conversionSettingsService: ConversionSettingsService;
   private readonly llmUsageService: LlmUsageService;
+  private readonly f1Service: F1Service;
+  private readonly f1Scheduler: F1Scheduler;
 
   constructor(
     chatService: ChatService,
@@ -37,6 +42,8 @@ export class WebServer {
     currencyService: CurrencyService,
     conversionSettingsService: ConversionSettingsService,
     llmUsageService: LlmUsageService,
+    f1Service: F1Service,
+    f1Scheduler: F1Scheduler,
   ) {
     this.chatService = chatService;
     this.reminderService = reminderService;
@@ -45,6 +52,8 @@ export class WebServer {
     this.currencyService = currencyService;
     this.conversionSettingsService = conversionSettingsService;
     this.llmUsageService = llmUsageService;
+    this.f1Service = f1Service;
+    this.f1Scheduler = f1Scheduler;
     this.app = Fastify({
       logger: true,
       trustProxy: true,
@@ -104,6 +113,12 @@ export class WebServer {
         prefix: '/api/llm-usage',
         llmUsageService: this.llmUsageService,
         chatService: this.chatService,
+      });
+
+      protectedInstance.register(f1Routes, {
+        prefix: '/api/f1',
+        f1Service: this.f1Service,
+        f1Scheduler: this.f1Scheduler,
       });
     });
   }
